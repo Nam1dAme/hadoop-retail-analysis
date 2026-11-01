@@ -22,10 +22,30 @@ PY
     ;;
   start)
     test -f var/hdfs/name/current/VERSION || { echo '请先执行 init'; exit 2; }
-    setsid -w hdfs --daemon start namenode
-    setsid -w hdfs --daemon start datanode
-    setsid -w yarn --daemon start resourcemanager
-    setsid -w yarn --daemon start nodemanager
+    for service in namenode datanode resourcemanager nodemanager; do
+      case "$service" in
+        namenode|datanode) tool=hdfs ;;
+        *) tool=yarn ;;
+      esac
+      if "$tool" --daemon status "$service" >/dev/null 2>&1; then
+        echo "$service 已运行"
+      else
+        setsid -w "$tool" --daemon start "$service"
+      fi
+    done
+    timeout 120 hdfs dfsadmin -safemode wait
+    python - <<'PYREADY'
+import json,time,urllib.request
+for _ in range(60):
+ try:
+  with urllib.request.urlopen('http://127.0.0.1:18088/ws/v1/cluster/nodes',timeout=2) as r:
+   nodes=json.load(r).get('nodes') or {}
+  if any(n['state']=='RUNNING' for n in nodes.get('node',[])):
+   print('HDFS 可写、YARN 节点已就绪');break
+ except (OSError,ValueError):pass
+ time.sleep(2)
+else:raise SystemExit('YARN节点未在120秒内就绪')
+PYREADY
     ;;
   stop)
     yarn --daemon stop nodemanager
