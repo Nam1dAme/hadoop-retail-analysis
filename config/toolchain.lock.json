@@ -1,0 +1,16 @@
+{
+  "baseline_version": "UBA-DOC-1.0.0",
+  "java": {
+    "version": "11.0.32+101",
+    "url": "https://github.com/adoptium/temurin11-binaries/releases/download/jdk-11.0.32.1%2B1/OpenJDK11U-jdk_x64_linux_hotspot_11.0.32.1_1.tar.gz",
+    "sha256": "5c3f68887c325d36d852ba534303e1f5f1f5cae7d6cc1e951d73e0d8e98a058d",
+    "directory": "java11"
+  },
+  "hadoop": {
+    "version": "3.4.2",
+    "url": "https://mirrors.tuna.tsinghua.edu.cn/apache/hadoop/common/hadoop-3.4.2/hadoop-3.4.2.tar.gz",
+    "official_checksum_url": "https://archive.apache.org/dist/hadoop/common/hadoop-3.4.2/hadoop-3.4.2.tar.gz.sha512",
+    "sha512": "79a383e156022d6690da359120b25db8146452265d92a4e890d9ea78c2078a01b661daf78163ee9b4acef7106b01fd5c8d1a55f7ad284f88b31ab3f402ae3acf",
+    "directory": "hadoop-3.4.2"
+  }
+}

@@ -1,0 +1,39 @@
+<?xml version='1.0' encoding='utf-8'?>
+<configuration>
+  <property>
+    <name>dfs.replication</name>
+    <value>1</value>
+  </property>
+  <property>
+    <name>dfs.blocksize</name>
+    <value>134217728</value>
+  </property>
+  <property>
+    <name>dfs.namenode.name.dir</name>
+    <value>file:${env.BEHAVIOR_ROOT}/var/hdfs/name</value>
+  </property>
+  <property>
+    <name>dfs.datanode.data.dir</name>
+    <value>file:${env.BEHAVIOR_ROOT}/var/hdfs/data</value>
+  </property>
+  <property>
+    <name>dfs.namenode.http-address</name>
+    <value>127.0.0.1:19870</value>
+  </property>
+  <property>
+    <name>dfs.datanode.address</name>
+    <value>127.0.0.1:19866</value>
+  </property>
+  <property>
+    <name>dfs.datanode.http.address</name>
+    <value>127.0.0.1:19864</value>
+  </property>
+  <property>
+    <name>dfs.datanode.ipc.address</name>
+    <value>127.0.0.1:19868</value>
+  </property>
+  <property>
+    <name>dfs.namenode.rpc-bind-host</name>
+    <value>127.0.0.1</value>
+  </property>
+</configuration>

@@ -1,0 +1,11 @@
+<?xml version='1.0' encoding='utf-8'?>
+<configuration>
+  <property>
+    <name>fs.defaultFS</name>
+    <value>hdfs://127.0.0.1:19000</value>
+  </property>
+  <property>
+    <name>hadoop.tmp.dir</name>
+    <value>${env.BEHAVIOR_ROOT}/var/hadoop/tmp</value>
+  </property>
+</configuration>
