@@ -5,6 +5,7 @@ import hashlib,json,subprocess
 ROOT=Path(__file__).resolve().parents[1]
 def sha(p):return hashlib.sha256(p.read_bytes()).hexdigest()
 report=json.loads((ROOT/'var/environment-probe.json').read_text())
+report['nvidia_smi']=subprocess.check_output(['/usr/lib/wsl/lib/nvidia-smi','--query-gpu=name,driver_version,memory.total,memory.used','--format=csv,noheader,nounits'],text=True).strip()
 assert report['status']=='PASS'
 source=ROOT/'var/source-sha256.txt'
 assert source.exists() and len(source.read_text().split()[0])==64
@@ -15,7 +16,7 @@ assert probe_files
 probe=json.loads(probe_files[-1].read_text());assert probe['status']=='PASS'
 config_hashes={str(p.relative_to(ROOT)):sha(p) for p in sorted((ROOT/'config').rglob('*')) if p.is_file() and p.name!='environment.lock.json'}
 lock=dict(report,uv_lock_sha256=sha(ROOT/'uv.lock'),toolchain_lock_sha256=sha(ROOT/'config/toolchain.lock.json'),
-    config_hashes=config_hashes,source={'path':'/mnt/e/UserBehavior/UserBehavior.csv','bytes':Path('/mnt/e/UserBehavior/UserBehavior.csv').stat().st_size,'sha256':source.read_text().split()[0]},
+    config_hashes=config_hashes,verifier_hashes={str(p.relative_to(ROOT)):sha(p) for p in (ROOT/'scripts').rglob('*') if p.is_file() and p.suffix in ('.py','.sh','.java','.ps1')},source={'path':'/mnt/e/UserBehavior/UserBehavior.csv','bytes':Path('/mnt/e/UserBehavior/UserBehavior.csv').stat().st_size,'sha256':source.read_text().split()[0]},
     host_storage=host,hadoop_probe=probe,freeze_commit=subprocess.check_output(['git','rev-parse','HEAD'],cwd=ROOT,text=True).strip())
 (ROOT/'config/environment.lock.json').write_text(json.dumps(lock,ensure_ascii=False,indent=2)+'\n')
 print('已写入config/environment.lock.json（无凭据）')
