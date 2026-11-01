@@ -8,6 +8,7 @@ public final class ContractTest {
   static void invalid(byte[] b,String reason)throws Exception{try{Event.parse(b,b.length,"a".repeat(64),0);throw new AssertionError();}catch(Event.Invalid e){require(e.reason.equals(reason));}}
   public static void main(String[] args)throws Exception{
     Event e=event("001,20,300,pv,"+Event.START);require(e.user.equals("001")&&e.scoped()&&e.hour()==0);
+    for(int d=0;d<9;d++)for(int h=0;h<24;h++){Event point=event("1,2,3,pv,"+(Event.START+d*86400L+h*3600));require(point.hour()==h&&point.date().equals(java.time.LocalDate.of(2017,11,25).plusDays(d).toString()));}
     invalid(new byte[]{(byte)0xff},"BAD_ENCODING");invalid("\n".getBytes(),"BAD_FIELD_COUNT");invalid("x,2,3,oops,0".getBytes(),"BAD_ID");invalid("1,2,3,oops,0".getBytes(),"BAD_BEHAVIOR");invalid("1,2,3,pv,9223372036854775808".getBytes(),"BAD_TIMESTAMP");invalid("1,2,3,pv, 0".getBytes(),"BAD_TIMESTAMP");
     require(!event("1,2,3,pv,"+(Event.START-1)).scoped());
     long t=Event.START+7*86400;
