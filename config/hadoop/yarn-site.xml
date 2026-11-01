@@ -88,4 +88,20 @@
     <name>yarn.nodemanager.env-whitelist</name>
     <value>JAVA_HOME,HADOOP_HOME,HADOOP_COMMON_HOME,HADOOP_HDFS_HOME,HADOOP_CONF_DIR,HADOOP_YARN_HOME,HADOOP_MAPRED_HOME,BEHAVIOR_ROOT,PATH,LANG,TZ</value>
   </property>
+  <property>
+    <name>yarn.resourcemanager.recovery.enabled</name>
+    <value>true</value>
+  </property>
+  <property>
+    <name>yarn.resourcemanager.store.class</name>
+    <value>org.apache.hadoop.yarn.server.resourcemanager.recovery.FileSystemRMStateStore</value>
+  </property>
+  <property>
+    <name>yarn.resourcemanager.fs.state-store.uri</name>
+    <value>file:${env.BEHAVIOR_ROOT}/var/yarn/rm-state</value>
+  </property>
+  <property>
+    <name>yarn.resourcemanager.work-preserving-recovery.enabled</name>
+    <value>false</value>
+  </property>
 </configuration>

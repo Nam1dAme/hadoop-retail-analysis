@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import platform
+import resource
 import subprocess
 import tempfile
 from datetime import datetime,timezone
@@ -93,6 +94,7 @@ try:
         report['database']=dict(version=version,port=port,buffer_pool_bytes=pool,max_connections=connections,role_isolation='PASS')
 finally:
     with db('migrator') as c,c.cursor() as q:q.execute('DROP TABLE _environment_probe')
+report['rss_peak_mib']=resource.getrusage(resource.RUSAGE_SELF).ru_maxrss/1024
 report['status']='PASS'
 report['code_commit']=subprocess.check_output(['git','rev-parse','HEAD'],cwd=ROOT,text=True).strip()
 path=ROOT/'var/environment-probe.json';path.write_text(json.dumps(report,ensure_ascii=False,indent=2)+'\n')
