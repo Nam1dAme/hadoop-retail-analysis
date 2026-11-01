@@ -73,7 +73,7 @@ def discover(config,name):
 def run_job(stage,inputs,output,params,lease,log,update_app):
     args=['hadoop','jar',params.get('jar_path',str(JAR)),'cn.behavior.Jobs',f'-Dbehavior.run.id={params["run_id"]}',f'-Dbehavior.reducers={params["reducers"]}']
     if params.get('source_sha256'):args.append('-Dbehavior.source.sha256='+params['source_sha256'])
-    if params.get('split_bytes'):args.append('-Dbehavior.split.bytes='+str(params['split_bytes']))
+    if stage=='J01' and params.get('split_bytes'):args.append('-Dbehavior.split.bytes='+str(params['split_bytes']))
     args+=['-Dfs.defaultFS='+lease.config['hdfs']['uri'],'-Dmapreduce.job.tags=behavior',stage,','.join(x['path'] for x in inputs),output]
     log=Path(log);log.parent.mkdir(parents=True,exist_ok=True);app_id=None
     with log.open('w') as out, log.open() as watch:
