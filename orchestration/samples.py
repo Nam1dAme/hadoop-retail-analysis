@@ -48,6 +48,11 @@ def prepare(lease,batch):
     if not cache.exists():
         cache.parent.mkdir(parents=True,exist_ok=True)
         storage.command('-get',info['archive_path'],str(cache))
+    for f in manifest['outputs']:
+        prefix=info['archive_path']+'/'
+        if f['path'].startswith(prefix):
+            local_file=cache/f['path'][len(prefix):]
+            if not local_file.is_file() or sha(local_file)!=f['sha256']:raise ManifestError('Cached sample artifact changed')
     from ml.shards import ShardDataset
     for split in ('TRAIN','VALIDATION','TEST','FORECAST'):
         ShardDataset(cache/split,verify=True)

@@ -48,11 +48,40 @@ class ShardDataset:
     """逐分片mmap；顺序和片内排列确定，不对全量样本构建Python列表。"""
     def __init__(self,path,verify=True):
         self.path=Path(path);self.manifest=json.loads((self.path/'manifest.json').read_text())
+        if self.manifest.get('schema_version')!='1.0':raise ManifestError('Unknown sample schema')
         if verify:
+            count=positive=negative=0
             for shard in self.manifest['shards']:
                 for f in shard['files']:
                     p=self.path/f['path']
+                    if not p.resolve().is_relative_to(self.path.resolve()):raise ManifestError('Unsafe shard file reference')
                     if sha(p)!=f['sha256'] or p.stat().st_size!=f['bytes']:raise ManifestError('Sample shard changed')
+                p=self.path/shard['directory'];n=shard['rows'];count+=n
+                if not 1<=n<=32768:raise ManifestError('Invalid shard rows')
+                arrays={k:np.load(p/(k+'.npy'),mmap_mode='r',allow_pickle=False) for k in SPECS}
+                for k,(dtype,shape) in SPECS.items():
+                    if arrays[k].shape!=(n,*shape) or arrays[k].dtype!=np.dtype(dtype):raise ManifestError('Shard shape/dtype mismatch: '+k)
+                lengths=arrays['length']
+                if np.any((lengths<1)|(lengths>128)):raise ManifestError('Invalid sequence lengths')
+                padding=np.arange(128)[None,:]>=lengths[:,None]
+                for k,maximum in [('category',16384),('behavior',4),('hour',24)]:
+                    x=arrays[k]
+                    if np.any(x[padding]!=0) or np.any(x[~padding]<1) or np.any(x>maximum):raise ManifestError('Invalid sequence/padding: '+k)
+                if not np.isin(arrays['cohort'],[0,1]).all() or np.any(arrays['history_event_count']<lengths):raise ManifestError('Invalid sample population metadata')
+                if not np.isfinite(arrays['numeric']).all() or not np.isfinite(arrays['gap']).all():raise ManifestError('Non-finite feature')
+                if np.any(arrays['gap'][padding]!=0) or np.any((arrays['gap']<0)|(arrays['gap']>1)) or np.any(arrays['gap'][:,0]!=0):raise ManifestError('Invalid time gaps')
+                labels=arrays['label']
+                if not np.isin(labels,[-1] if self.path.name=='FORECAST' else [0,1]).all():raise ManifestError('Invalid labels')
+                positive+=int(np.count_nonzero(labels==1));negative+=int(np.count_nonzero(labels==0))
+                offsets=np.load(p/'user_offsets.npy',mmap_mode='r',allow_pickle=False)
+                if offsets.dtype!=np.dtype('<i8') or offsets.shape!=(n+1,) or offsets[0]!=0 or np.any(np.diff(offsets)<1) or offsets[-1]!=(p/'user_ids.utf8').stat().st_size:raise ManifestError('Invalid ID offsets')
+                raw=(p/'user_ids.utf8').read_bytes()
+                for i in range(n):
+                    user=raw[offsets[i]:offsets[i+1]]
+                    if not 1<=len(user)<=20 or not user.isdigit():raise ManifestError('Invalid source user ID')
+                    expected=hashlib.sha256(user+b'|'+str(int(arrays['as_of'][i])).encode()).hexdigest().encode()
+                    if bytes(arrays['sample_key'][i])!=expected:raise ManifestError('Sample key does not match source user and anchor')
+            if (count,positive,negative)!=(self.manifest['rows'],self.manifest['positive_count'],self.manifest['negative_count']):raise ManifestError('Shard population differs')
     def batches(self,batch_size=256,seed=42,epoch=0,shuffle=True):
         if batch_size<1:raise ValueError('batch_size must be positive')
         rng=np.random.default_rng(seed+epoch);shards=list(self.manifest['shards'])

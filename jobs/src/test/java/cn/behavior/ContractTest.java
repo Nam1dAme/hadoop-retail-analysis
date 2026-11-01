@@ -24,6 +24,7 @@ public final class ContractTest {
     require(n.get("sample_key").asText().equals(Samples.hex("1|"+t)));
     Samples.State negative=new Samples.State(t);negative.accept(event("1,2,3,pv,"+(t-1)));negative.accept(event("1,2,3,buy,"+(t+86400)));require(!negative.label);
     ObjectNode f=negative.output("1",6,false);require(f.get("label").asInt()==-1&&f.get("category").get(1).asInt()==0);
+    Samples.State bounded=new Samples.State(t);Event repeated=event("1,2,3,pv,"+(t-1));for(int i=0;i<1000000;i++)bounded.accept(repeated);require(bounded.sequence.size()==128&&bounded.history==1000000);
     require(Profile.bucket("300")>=1&&Profile.bucket("300")<=16384);
     System.out.println("PASS: strict parsing, precedence, windows, bounded sequence, complete counts, padding, labels");
   }

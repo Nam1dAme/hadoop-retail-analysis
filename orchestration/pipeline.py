@@ -143,6 +143,7 @@ def apply_quality(lease,batch,clean,profile=None):
 
 def pipeline(lease,batch,reducers=2,through='J04summary',audit=False,split_bytes=None):
     if not 1<=reducers<=64 or through not in STAGES:raise ConfigError('Invalid stage or reducers')
+    if audit and not lease.config.get('synthetic'):raise ConfigError('Audit bypass is restricted to synthetic tests')
     source=get_stage(lease,batch,'I00')['source'];params={'reducers':reducers,'source_sha256':source['sha256']}
     if split_bytes:
         if not lease.config.get('synthetic'):raise ConfigError('Tiny split override is only for isolated synthetic tests')
@@ -156,6 +157,8 @@ def pipeline(lease,batch,reducers=2,through='J04summary',audit=False,split_bytes
         elif stage=='J06':inputs=files(results['J05'])
         else:inputs=files(results['J01'],'facts')
         results[stage]=stage_run(lease,batch,stage,inputs,params)
+        if stage=='J01' and not results[stage]['counters'].get('BEHAVIOR',{}).get('accepted_rows',0):
+            apply_quality(lease,batch,results[stage]);raise QualityError('No accepted source records')
         if stage=='J02':
             quality=apply_quality(lease,batch,results['J01'],results['J02'])
             if not quality['gate_passed'] and not (audit and lease.config.get('synthetic')):raise QualityError('Quality thresholds failed; profile preserved')

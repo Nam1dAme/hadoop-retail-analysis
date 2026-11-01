@@ -9,7 +9,7 @@ from ml.shards import ShardWriter,ShardDataset
 from orchestration.common import ConfigError,load
 
 def sample(i,label=0):
-    return dict(sample_key=hashlib.sha256(str(i).encode()).hexdigest(),user_id='00'+str(i),as_of=1512057600,length=1,category=[7]+[0]*127,behavior=[1]+[0]*127,hour=[1]+[0]*127,gap=[0.0]*128,numeric=list(range(14)),label=label,history_event_count=1,cohort='SEEN_TRAIN')
+    return dict(sample_key=hashlib.sha256(('00'+str(i)+'|1512057600').encode()).hexdigest(),user_id='00'+str(i),as_of=1512057600,length=1,category=[7]+[0]*127,behavior=[1]+[0]*127,hour=[1]+[0]*127,gap=[0.0]*128,numeric=list(range(14)),label=label,history_event_count=1,cohort='SEEN_TRAIN')
 
 def test_source_bytes_and_lines(tmp_path):
     p=tmp_path/'input.csv';p.write_bytes(b'a\r\nb\n\ninvalid\xff')
