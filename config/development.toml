@@ -1,0 +1,16 @@
+baseline_version = "UBA-DOC-1.0.0"
+[source]
+path = "/mnt/e/UserBehavior/UserBehavior.csv"
+[database]
+host = "127.0.0.1"
+port = 3307
+name = "behavior_analytics"
+[hdfs]
+uri = "hdfs://127.0.0.1:19000"
+root = "/behavior/v1"
+[api]
+host = "127.0.0.1"
+port = 8010
+[ui]
+host = "127.0.0.1"
+port = 8510
