@@ -38,7 +38,23 @@ public final class Files extends Configured implements Tool {
         org.apache.hadoop.io.compress.CompressionCodec codec=new org.apache.hadoop.io.compress.CompressionCodecFactory(c).getCodec(f.getPath());
         try(InputStream raw=fs.open(f.getPath());InputStream in=codec==null?raw:codec.createInputStream(raw)){byte[] b=new byte[1024*1024];int n,last=-1;while((n=in.read(b))!=-1){for(int i=0;i<n;i++)if(b[i]=='\n')rows++;last=b[n-1];}if(last!=-1&&last!='\n')rows++;}
       }
-      ObjectNode result=JSON.createObjectNode();result.put("path",f.getPath().toUri().getPath());result.put("bytes",f.getLen());result.put("rows",rows);StringBuilder h=new StringBuilder();for(byte b:digest.digest())h.append(String.format("%02x",b&255));result.put("sha256",h.toString());if(sequence){result.put("key_class",keyClass);result.put("value_class",valueClass);}System.out.println(result);
+      ObjectNode arrayMetadata=null;
+      if(name.endsWith(".npy")){
+        try(DataInputStream in=new DataInputStream(fs.open(f.getPath()))){
+          byte[] magic=new byte[6];in.readFully(magic);if(!Arrays.equals(magic,new byte[]{(byte)0x93,'N','U','M','P','Y'}))throw new IOException("Invalid NPY magic");
+          int major=in.readUnsignedByte();in.readUnsignedByte();int size=in.readUnsignedByte()|(in.readUnsignedByte()<<8);
+          if(major>=2)size|=in.readUnsignedByte()<<16|in.readUnsignedByte()<<24;
+          if(size<0||size>1024*1024)throw new IOException("Invalid NPY header size");
+          byte[] header=new byte[size];in.readFully(header);String text=new String(header,StandardCharsets.UTF_8);
+          java.util.regex.Matcher shape=java.util.regex.Pattern.compile("'shape': *\\(([^)]*)\\)").matcher(text);
+          java.util.regex.Matcher dtype=java.util.regex.Pattern.compile("'descr': *'([^']+)'").matcher(text);
+          if(!shape.find()||!dtype.find())throw new IOException("Invalid NPY header");
+          arrayMetadata=JSON.createObjectNode();arrayMetadata.put("dtype",dtype.group(1));ArrayNode dimensions=arrayMetadata.putArray("shape");
+          String[] dims=shape.group(1).split(",");for(String dim:dims)if(!dim.trim().isEmpty())dimensions.add(Long.parseLong(dim.trim()));
+          rows=dimensions.get(0).asLong();
+        }
+      }
+      ObjectNode result=JSON.createObjectNode();if(arrayMetadata!=null)result.set("array",arrayMetadata);result.put("path",f.getPath().toUri().getPath());result.put("bytes",f.getLen());result.put("rows",rows);StringBuilder h=new StringBuilder();for(byte b:digest.digest())h.append(String.format("%02x",b&255));result.put("sha256",h.toString());if(sequence){result.put("key_class",keyClass);result.put("value_class",valueClass);}System.out.println(result);
     }
     return 0;
   }
