@@ -1,0 +1,30 @@
+[project]
+name = "hadoop-retail-analysis"
+version = "0.1.0"
+description = "Hadoop 用户行为分析与单 GPU 预测环境"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+  "torch==2.6.0+cu124",
+  "numpy==1.26.4",
+  "fastapi>=0.115,<0.116",
+  "uvicorn>=0.34,<0.35",
+  "streamlit>=1.40,<1.41",
+  "PyMySQL>=1.1,<1.2",
+  "plotly>=5.24,<5.25",
+]
+
+[dependency-groups]
+dev = ["pytest>=8,<9", "httpx>=0.28,<0.29"]
+
+[tool.uv]
+package = false
+required-version = ">=0.13.1"
+environments = ["sys_platform == 'linux' and platform_machine == 'x86_64'"]
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu124" }
+
+[[tool.uv.index]]
+name = "pytorch-cu124"
+url = "https://download.pytorch.org/whl/cu124"
+explicit = true
