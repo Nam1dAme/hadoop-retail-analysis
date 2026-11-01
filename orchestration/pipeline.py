@@ -31,13 +31,17 @@ def latest(db,batch,stage):
 def stage_run(lease,batch,stage,inputs,parameters,executor=None):
     lease.guard();db=lease.db;storage=Hdfs(lease.config,lease)
     env_hash=sha(ROOT/'config/environment.lock.json');code=commit()
-    params={'stage':stage,'jar_sha256':sha(JAR),'parameters':parameters,'baseline_version':BASELINE,'runtime_config_sha256':fingerprint(lease.config)}
+    implementation=implementation_fingerprint()
+    previous_implementation=getattr(lease,'implementation',implementation)
+    if previous_implementation!=implementation:raise ConfigError('Runtime source changed during pipeline; resume from committed code')
+    lease.implementation=implementation
+    params={'implementation_sha256':implementation,'stage':stage,'jar_sha256':sha(JAR),'parameters':parameters,'baseline_version':BASELINE,'runtime_config_sha256':fingerprint(lease.config)}
     input_hash=fingerprint(inputs);config_hash=fingerprint(params)
     identity={'input_hash':input_hash,'config_sha256':config_hash,'code_commit':code,'environment_sha256':env_hash,'batch_id':batch,'stage':stage}
     with db.cursor() as q:
-        q.execute('SELECT * FROM task_run WHERE batch_id=%s AND stage=%s AND input_hash=%s AND config_hash=%s AND code_commit=%s AND environment_hash=%s ORDER BY attempt DESC',(batch,stage,input_hash,config_hash,code,env_hash));previous=q.fetchall()
+        q.execute('SELECT * FROM task_run WHERE batch_id=%s AND stage=%s AND input_hash=%s AND config_hash=%s AND environment_hash=%s ORDER BY attempt DESC',(batch,stage,input_hash,config_hash,env_hash));previous=q.fetchall()
     for row in previous:
-        if row['status']=='SUCCEEDED':return validate(storage,row['output_path'],identity)
+        if row['status']=='SUCCEEDED':return validate(storage,row['output_path'],dict(identity,code_commit=row['code_commit']))
     # 即便参数改变，也不能覆盖或遗忘尚在运行的尝试。
     with db.cursor() as q:
         q.execute("SELECT * FROM task_run WHERE status IN ('PENDING','RUNNING')");unfinished=q.fetchall()
@@ -47,7 +51,7 @@ def stage_run(lease,batch,stage,inputs,parameters,executor=None):
         app=application(lease.config,row['application_id']) if row['application_id'] else None
         if any(x['state'] not in ('FINISHED','FAILED','KILLED') for x in apps+([app] if app else [])):raise LockBusy('Original YARN application is active')
         if storage.exists(row['output_path']+'/manifest.json'):
-            recovered=validate(storage,row['output_path'],{'run_id':row['run_id'],'batch_id':row['batch_id'],'code_commit':row['code_commit'],'config_sha256':row['config_hash'],'environment_sha256':row['environment_hash']})
+            recovered=validate(storage,row['output_path'],{'run_id':row['run_id'],'batch_id':row['batch_id'],'code_commit':row['code_commit'],'config_sha256':row['config_hash'],'environment_sha256':row['environment_hash'],'input_hash':row['input_hash'],'stage':row['stage']})
             with db.cursor() as q:q.execute("UPDATE task_run SET status='SUCCEEDED',finished_at=%s,updated_at=%s WHERE run_id=%s",(now(),now(),row['run_id']))
             if row['run_id'] in {x['run_id'] for x in previous}:return recovered
         else:
@@ -70,13 +74,16 @@ def stage_run(lease,batch,stage,inputs,parameters,executor=None):
         if executor:
             storage.mkdir(temporary);extra=executor(storage,temporary,local,run_id) or {};app_id=None
         else:
-            app_id=run_job(stage,inputs,temporary,dict(parameters,run_id=run_id),lease,local/'driver.log',update_app)
+            shutil.copyfile(JAR,local/'business.jar')
+            if sha(local/'business.jar')!=params['jar_sha256']:raise ConfigError('JAR changed during submission')
+            app_id=run_job(stage,inputs,temporary,dict(parameters,run_id=run_id,jar_path=str(local/'business.jar')),lease,local/'driver.log',update_app)
             metrics=storage.json(temporary+'/_metrics.json')
             if metrics['run_id']!=run_id or metrics['stage']!=stage:raise ManifestError('Job identity differs')
             if app_id!=metrics['application_id']:raise ManifestError('Application registration mismatch')
             app=application(lease.config,app_id)
             if not app or app['state']!='FINISHED' or app['finalStatus']!='SUCCEEDED':raise ManifestError('YARN application is not authoritatively successful')
             extra={'counters':metrics['counters']}
+        if (local/'business.jar').exists():storage.put(local/'business.jar',temporary+'/business.jar')
         storage.write_json(temporary+'/config.json',params,local/'config.json')
         storage.put(ROOT/'config/environment.lock.json',temporary+'/environment.lock.json')
         if not storage.exists(temporary+'/_SUCCESS'):

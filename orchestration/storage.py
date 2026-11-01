@@ -71,7 +71,7 @@ def discover(config,name):
     return [x for x in apps.get('app',[]) if x['name']==name]
 
 def run_job(stage,inputs,output,params,lease,log,update_app):
-    args=['hadoop','jar',str(JAR),'cn.behavior.Jobs',f'-Dbehavior.run.id={params["run_id"]}',f'-Dbehavior.reducers={params["reducers"]}']
+    args=['hadoop','jar',params.get('jar_path',str(JAR)),'cn.behavior.Jobs',f'-Dbehavior.run.id={params["run_id"]}',f'-Dbehavior.reducers={params["reducers"]}']
     if params.get('source_sha256'):args.append('-Dbehavior.source.sha256='+params['source_sha256'])
     if params.get('split_bytes'):args.append('-Dbehavior.split.bytes='+str(params['split_bytes']))
     args+=['-Dfs.defaultFS='+lease.config['hdfs']['uri'],'-Dmapreduce.job.tags=behavior',stage,','.join(x['path'] for x in inputs),output]

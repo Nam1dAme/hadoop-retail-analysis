@@ -54,3 +54,7 @@ def runtime_env():
 def process_start(pid):
     try:return Path(f'/proc/{pid}/stat').read_text().split(') ',1)[1].split()[19]
     except (OSError,IndexError):return None
+
+def implementation_fingerprint():
+    paths=[p for folder in ('orchestration','ingest','ml') for p in (ROOT/folder).glob('*.py')]
+    return fingerprint({str(p.relative_to(ROOT)):sha(p) for p in sorted(paths)})

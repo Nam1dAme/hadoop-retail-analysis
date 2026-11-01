@@ -61,3 +61,12 @@ root="{root}"
 work_dir="{ROOT/work}"
 ''')
     with pytest.raises(ConfigError):load(cfg)
+
+def test_code_identity_ignores_document_only_changes(tmp_path,monkeypatch):
+    import orchestration.common as common
+    monkeypatch.setattr(common,'ROOT',tmp_path)
+    (tmp_path/'orchestration').mkdir();code=tmp_path/'orchestration/worker.py';code.write_text('x=1\n')
+    identity=common.implementation_fingerprint()
+    (tmp_path/'docs').mkdir();(tmp_path/'docs/report.md').write_text('new execution evidence')
+    assert common.implementation_fingerprint()==identity
+    code.write_text('x=2\n');assert common.implementation_fingerprint()!=identity
