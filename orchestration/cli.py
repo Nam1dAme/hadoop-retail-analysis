@@ -5,7 +5,7 @@ from pathlib import Path
 import subprocess
 import sys
 from .common import *
-from .database import connect,migrate,require_current
+from .database import connect,migrate,require_current,backup as database_backup
 from .control import Lease
 from .pipeline import pipeline,STAGES
 from .samples import prepare
@@ -38,8 +38,7 @@ def execute(args):
     work=Path(c['paths']['work_dir']);work.mkdir(parents=True,exist_ok=True)
     if args.command=='migrate':
         backup=work/'backups'/('pre-migration-'+stamp().replace(':','')+'.sql');backup.parent.mkdir(parents=True,exist_ok=True)
-        with backup.open('wb') as f:
-            subprocess.run(['mariadb-dump','--defaults-extra-file='+str(Path(args.credentials).resolve()),'--single-transaction','--skip-lock-tables','--host='+c['database']['host'],'--port='+str(c['database']['port']),c['database']['name']],stdout=f,check=True)
+        database_backup(c,args.credentials,backup)
         with connect(c,args.credentials) as db:return migrate(db)
     with connect(c,args.credentials) as db:
         require_current(db)

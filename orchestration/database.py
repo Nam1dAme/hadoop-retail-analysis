@@ -28,3 +28,17 @@ def require_current(connection):
         q.execute('SELECT version,sha256 FROM schema_migration');actual={r['version']:r['sha256'] for r in q.fetchall()}
     for p in (ROOT/'migrations').glob('*.sql'):
         if actual.get(p.name)!=sha(p):raise ConfigError('Database migrations required')
+
+def backup(config,credentials,path):
+    """mysqldump不接受client.database；临时凭据0600且不出现在进程参数。"""
+    import os
+    import subprocess
+    import tempfile
+    cfg=configparser.ConfigParser();cfg.read(credentials)
+    selected=configparser.ConfigParser();selected['client']={k:v for k,v in cfg['client'].items() if k in ('user','password')}
+    selected['client']['host']=config['database']['host'];selected['client']['port']=str(config['database']['port'])
+    path=Path(path);path.parent.mkdir(parents=True,exist_ok=True)
+    with tempfile.NamedTemporaryFile(mode='w+',dir=path.parent,suffix='.cnf') as f:
+        selected.write(f);f.flush()
+        with os.fdopen(os.open(path,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600),'wb') as output:
+            subprocess.run(['mariadb-dump','--defaults-extra-file='+f.name,'--single-transaction','--skip-lock-tables',config['database']['name']],stdout=output,check=True)
