@@ -8,7 +8,7 @@ SPECS={'sample_key':('S64',()),'as_of':('<i8',()),'length':('u1',()),'category':
 class ShardWriter:
     def __init__(self,path,mean,std,capacity=32768):
         if not 1<=capacity<=32768:raise ValueError('shard capacity out of range')
-        self.path=Path(path);self.path.mkdir(parents=True,exist_ok=False);self.mean=np.asarray(mean,dtype=np.float64);self.std=np.asarray(std,dtype=np.float64);self.capacity=capacity;self.buffers={};self.shards=[];self.count=0;self.positives=0;self.zeros=0;self.index=0;self.identities=hashlib.sha256();self.current=None
+        self.path=Path(path);self.path.mkdir(parents=True,exist_ok=False);self.mean=np.asarray(mean,dtype=np.float64);self.std=np.asarray(std,dtype=np.float64);self.capacity=capacity;self.buffers={};self.shards=[];self.count=0;self.positives=0;self.zeros=0;self.seen=0;self.index=0;self.identities=hashlib.sha256();self.current=None
     def _open(self):
         self.current=self.path/f'shard-{len(self.shards):05}';self.current.mkdir()
         self.buffers={k:np.lib.format.open_memmap(self.current/(k+'.npy'),mode='w+',dtype=dtype,shape=(self.capacity,*shape)) for k,(dtype,shape) in SPECS.items()}
@@ -16,13 +16,14 @@ class ShardWriter:
     def add(self,row):
         if self.current is None:self._open()
         n=self.index;length=int(row['length']);assert 1<=length<=128
+        if row['cohort'] not in ('SEEN_TRAIN','UNSEEN_TRAIN'):raise ManifestError('Unknown cohort')
         for k in SPECS:
             if k=='numeric':v=(np.asarray(row[k],dtype=np.float64)-self.mean)/self.std
             elif k=='cohort':v=1 if row[k]=='SEEN_TRAIN' else 0
             else:v=row[k]
             self.buffers[k][n]=v
         raw=row['user_id'].encode();self.ids.write(raw);self.offsets[n+1]=self.offsets[n]+len(raw)
-        self.identities.update((row['sample_key']+'\n').encode());self.count+=1;self.positives+=row['label']==1;self.zeros+=row['label']==0;self.index+=1
+        self.identities.update((row['sample_key']+'\n').encode());self.count+=1;self.positives+=row['label']==1;self.zeros+=row['label']==0;self.seen+=row['cohort']=='SEEN_TRAIN';self.index+=1
         if self.index==self.capacity:self._close()
     def _close(self):
         n=self.index;self.ids.close()
@@ -41,7 +42,7 @@ class ShardWriter:
         self.shards.append({'directory':self.current.name,'rows':n,'files':files});self.current=None
     def finish(self):
         if self.current:self._close()
-        m={'schema_version':'1.0','rows':self.count,'positive_count':self.positives,'negative_count':self.zeros,'sample_order_sha256':self.identities.hexdigest(),'shards':self.shards}
+        m={'schema_version':'1.0','rows':self.count,'positive_count':self.positives,'negative_count':self.zeros,'seen_count':self.seen,'unseen_count':self.count-self.seen,'sample_order_sha256':self.identities.hexdigest(),'shards':self.shards}
         atomic_json(self.path/'manifest.json',m);return m
 
 class ShardDataset:
@@ -50,7 +51,7 @@ class ShardDataset:
         self.path=Path(path);self.manifest=json.loads((self.path/'manifest.json').read_text())
         if self.manifest.get('schema_version')!='1.0':raise ManifestError('Unknown sample schema')
         if verify:
-            count=positive=negative=0
+            count=positive=negative=seen=0
             for shard in self.manifest['shards']:
                 for f in shard['files']:
                     p=self.path/f['path']
@@ -72,7 +73,7 @@ class ShardDataset:
                 if np.any(arrays['gap'][padding]!=0) or np.any((arrays['gap']<0)|(arrays['gap']>1)) or np.any(arrays['gap'][:,0]!=0):raise ManifestError('Invalid time gaps')
                 labels=arrays['label']
                 if not np.isin(labels,[-1] if self.path.name=='FORECAST' else [0,1]).all():raise ManifestError('Invalid labels')
-                positive+=int(np.count_nonzero(labels==1));negative+=int(np.count_nonzero(labels==0))
+                positive+=int(np.count_nonzero(labels==1));negative+=int(np.count_nonzero(labels==0));seen+=int(np.count_nonzero(arrays['cohort']==1))
                 offsets=np.load(p/'user_offsets.npy',mmap_mode='r',allow_pickle=False)
                 if offsets.dtype!=np.dtype('<i8') or offsets.shape!=(n+1,) or offsets[0]!=0 or np.any(np.diff(offsets)<1) or offsets[-1]!=(p/'user_ids.utf8').stat().st_size:raise ManifestError('Invalid ID offsets')
                 raw=(p/'user_ids.utf8').read_bytes()
@@ -81,6 +82,7 @@ class ShardDataset:
                     if not 1<=len(user)<=20 or not user.isdigit():raise ManifestError('Invalid source user ID')
                     expected=hashlib.sha256(user+b'|'+str(int(arrays['as_of'][i])).encode()).hexdigest().encode()
                     if bytes(arrays['sample_key'][i])!=expected:raise ManifestError('Sample key does not match source user and anchor')
+            if 'seen_count' in self.manifest and (seen,count-seen)!=(self.manifest['seen_count'],self.manifest['unseen_count']):raise ManifestError('Cohort counts differ')
             if (count,positive,negative)!=(self.manifest['rows'],self.manifest['positive_count'],self.manifest['negative_count']):raise ManifestError('Shard population differs')
     def batches(self,batch_size=256,seed=42,epoch=0,shuffle=True):
         if batch_size<1:raise ValueError('batch_size must be positive')
@@ -92,3 +94,18 @@ class ShardDataset:
             for start in range(0,len(order),batch_size):
                 indices=order[start:start+batch_size]
                 yield {k:np.array(a[indices],copy=True) for k,a in arrays.items()}
+
+def training_groups(dataset,micro_batch=256,effective_batch=512,seed=42,epoch=0):
+    """跨分片累计到有效batch；返回按真实样本数归一的每个microbatch权重。"""
+    if dataset.path.name!='TRAIN':raise ValueError('Training groups require TRAIN samples')
+    if micro_batch<1 or effective_batch<1 or micro_batch>effective_batch:raise ValueError('Invalid batch sizes')
+    group=[];total=0
+    for batch in dataset.batches(micro_batch,seed,epoch,shuffle=True):
+        offset=0;n=len(batch['label'])
+        while offset<n:
+            take=min(n-offset,effective_batch-total)
+            group.append({k:v[offset:offset+take] for k,v in batch.items()});total+=take;offset+=take
+            if total==effective_batch:
+                yield group,[len(x['label'])/total for x in group],total
+                group=[];total=0
+    if group:yield group,[len(x['label'])/total for x in group],total

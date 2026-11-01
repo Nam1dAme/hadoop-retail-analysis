@@ -30,9 +30,12 @@ def prepare(lease,batch):
             if key!=row['sample_key']:raise ManifestError('Sample identity mismatch')
             writers[row['split']].add(row)
         summaries={s:w.finish() for s,w in writers.items()}
+        from ml.shards import ShardDataset
+        for s in summaries:ShardDataset(cache/s,verify=True)
         for s,m in summaries.items():
             expected_rows=raw['counters']['SAMPLES'].get(s,0)
             if expected_rows!=m['rows']:raise ManifestError('Export rows differ from Hadoop counters')
+            if m['seen_count']!=expected[s]['seen'] or m['unseen_count']!=expected[s]['unseen']:raise ManifestError('Cohort population differs from TRAIN-only bitmap membership')
             if any(m[k]!=expected[s][k] for k in ('rows','positive_count','negative_count')):raise ManifestError('Sample population or label counts differ from independent user-day masks')
         if normalization['count']!=summaries['TRAIN']['rows']:raise ManifestError('Normalization population differs')
         for s in ('TRAIN','VALIDATION','TEST'):
@@ -41,7 +44,7 @@ def prepare(lease,batch):
         atomic_json(cache/'normalization.json',normalization)
         atomic_json(cache/'manifest.json',{'schema_version':'1.0','split_version':'daily-48h-24h-v1','batch_id':batch,'run_id':run_id,'splits':summaries,'normalization':normalization,'coverage':coverage})
         storage.put(cache,temp+'/shards')
-        return {'samples':{'cache_path':str(cache),'splits':{s:{k:m[k] for k in ('rows','positive_count','negative_count','sample_order_sha256')} for s,m in summaries.items()},'normalization':normalization,'coverage':coverage,'expected_population':expected,'archive_path':temp+'/shards'}}
+        return {'samples':{'cache_path':str(cache),'splits':{s:{k:m[k] for k in ('rows','positive_count','negative_count','seen_count','unseen_count','sample_order_sha256')} for s,m in summaries.items()},'normalization':normalization,'coverage':coverage,'expected_population':expected,'archive_path':temp+'/shards'}}
     manifest=stage_run(lease,batch,'E01',files(raw)+files(moments),{'split_version':'daily-48h-24h-v1','shard_capacity':32768,'coverage':coverage,'population_audit':expected},export)
     info=manifest['samples']
     cache=Path(info['cache_path'])
