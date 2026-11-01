@@ -43,18 +43,25 @@ public final class Samples {
       for(int i=0;i<7;i++)if(states[i].history>0){ObjectNode n=states[i].output(user,i,seen);c.write(new Text(n.get("sample_key").asText()),new Text(n.toString()));c.getCounter("SAMPLES",SPLITS[i]).increment(1);c.getCounter("LABELS",SPLITS[i]+"_"+n.get("label").asInt()).increment(1);if(states[i].history>128)c.getCounter("TRUNCATED",SPLITS[i]).increment(1);}
     }
   }
+  /** 保留sum/sumsq审计，同时以Welford/Chan避免常量特征的消减误差。 */
+  static final class Moments {
+    long count;final double[] sum=new double[14],squares=new double[14],mean=new double[14],m2=new double[14];
+    void add(double[] x){count=Math.addExact(count,1);for(int i=0;i<14;i++){sum[i]+=x[i];squares[i]+=x[i]*x[i];double delta=x[i]-mean[i];mean[i]+=delta/count;m2[i]+=delta*(x[i]-mean[i]);}}
+    void merge(JsonNode n){long other=n.get("count").asLong();if(other==0)return;long total=Math.addExact(count,other);for(int i=0;i<14;i++){double delta=n.get("mean").get(i).asDouble()-mean[i];m2[i]+=n.get("m2").get(i).asDouble()+delta*delta*((double)count*other/total);mean[i]+=delta*((double)other/total);sum[i]+=n.get("sum").get(i).asDouble();squares[i]+=n.get("squares").get(i).asDouble();}count=total;}
+    ObjectNode json(){ObjectNode n=JSON.createObjectNode();n.put("count",count);ArrayNode a=n.putArray("sum"),b=n.putArray("squares"),c=n.putArray("mean"),d=n.putArray("m2");for(int i=0;i<14;i++){a.add(sum[i]);b.add(squares[i]);c.add(mean[i]);d.add(m2[i]);}return n;}
+  }
   public static class MomentMap extends Mapper<Text,Text,Text,Text>{
-    private final double[] sum=new double[14],squares=new double[14];long count;
+    private final Moments moments=new Moments();
     protected void map(Text k,Text value,Context c)throws IOException{
       JsonNode n=JSON.readTree(value.toString());if(!n.get("split").asText().equals("TRAIN"))return;
-      count++;for(int i=0;i<14;i++){double x=n.get("numeric").get(i).asDouble();sum[i]+=x;squares[i]+=x*x;}
+      double[] x=new double[14];for(int i=0;i<14;i++)x[i]=n.get("numeric").get(i).asDouble();moments.add(x);
     }
-    protected void cleanup(Context c)throws IOException,InterruptedException{ObjectNode n=JSON.createObjectNode();n.put("count",count);ArrayNode a=n.putArray("sum"),b=n.putArray("squares");for(int i=0;i<14;i++){a.add(sum[i]);b.add(squares[i]);}c.write(new Text("moments"),new Text(n.toString()));}
+    protected void cleanup(Context c)throws IOException,InterruptedException{c.write(new Text("moments"),new Text(moments.json().toString()));}
   }
   public static class MomentReduce extends Reducer<Text,Text,Text,Text>{
     protected void reduce(Text k,Iterable<Text> values,Context c)throws IOException,InterruptedException{
-      long count=0;double[] sum=new double[14],squares=new double[14];for(Text value:values){JsonNode n=JSON.readTree(value.toString());count=Math.addExact(count,n.get("count").asLong());for(int i=0;i<14;i++){sum[i]+=n.get("sum").get(i).asDouble();squares[i]+=n.get("squares").get(i).asDouble();}}
-      if(count==0)throw new IOException("No TRAIN samples");ObjectNode n=JSON.createObjectNode();n.put("count",count);ArrayNode mean=n.putArray("mean"),std=n.putArray("std");for(int i=0;i<14;i++){double m=sum[i]/count,v=Math.max(0,squares[i]/count-m*m);mean.add(m);std.add(v==0?1:Math.sqrt(v));}c.write(k,new Text(n.toString()));
+      Moments moments=new Moments();for(Text value:values)moments.merge(JSON.readTree(value.toString()));
+      if(moments.count==0)throw new IOException("No TRAIN samples");ObjectNode n=JSON.createObjectNode();n.put("count",moments.count);ArrayNode mean=n.putArray("mean"),std=n.putArray("std");for(int i=0;i<14;i++){double v=Math.max(0,moments.m2[i]/moments.count);mean.add(moments.mean[i]);std.add(v==0?1:Math.sqrt(v));}c.write(k,new Text(n.toString()));
     }
   }
 }
