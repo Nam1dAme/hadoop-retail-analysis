@@ -108,3 +108,17 @@ def test_orphan_java_is_identified_by_staging_path(tmp_path,monkeypatch):
     assert not control.live_java('aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee')
     command.write_bytes(b'/usr/bin/python\0'+run.encode()+b'\0')
     assert not control.live_java(run)
+
+def test_bundle_validation_checks_nested_manifests():
+    from orchestration.pipeline import validate
+    from orchestration.common import BASELINE,fingerprint,ManifestError
+    cfg={'stage':'E01'}
+    nested={'path':'/bundle/shards/TRAIN/manifest.json','sha256':'a'*64,'bytes':12,'rows':0}
+    m={'baseline_version':BASELINE,'status':'SUCCEEDED','stage':'E01','config':cfg,'config_sha256':fingerprint(cfg),'inputs':[],'input_hash':fingerprint([]),'outputs':[nested]}
+    class Storage:
+        def json(self,p):return m
+        def inspect(self,p):return [dict(nested),{'path':'/bundle/manifest.json','sha256':'b'*64,'bytes':42,'rows':0}]
+    assert validate(Storage(),'/bundle')==m
+    class Damaged(Storage):
+        def inspect(self,p):return [dict(nested,sha256='c'*64)]
+    with pytest.raises(ManifestError):validate(Damaged(),'/bundle')

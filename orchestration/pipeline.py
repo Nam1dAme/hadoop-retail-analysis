@@ -18,7 +18,7 @@ def validate(storage,path,expected=None):
     if manifest['baseline_version']!=BASELINE or manifest['status']!='SUCCEEDED':raise ManifestError('Invalid manifest version or status')
     if fingerprint(manifest['config'])!=manifest['config_sha256'] or fingerprint(manifest['inputs'])!=manifest['input_hash']:raise ManifestError('Manifest parameter/input fingerprint differs')
     if manifest['stage']=='I00' and storage.digest(manifest['source']['path'])!=(manifest['source']['sha256'],manifest['source']['bytes']):raise ManifestError('Raw archive changed')
-    actual=[x for x in storage.inspect(path) if not x['path'].endswith('/manifest.json')]
+    actual=[x for x in storage.inspect(path) if x['path']!=path+'/manifest.json']
     if actual!=manifest['outputs']:raise ManifestError('Immutable output hash/row/schema changed')
     return manifest
 
