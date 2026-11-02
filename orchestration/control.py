@@ -60,7 +60,8 @@ def alive(row):
     return row['pid'] is not None and process_start(row['pid'])==row['process_started_at']
 
 def live_java(run_id):
-    token=('behavior.run.id='+run_id).encode()
+    # HDFS客户端没有behavior.run.id属性，但暂存路径或冻结JAR路径包含run_id。
+    token=run_id.encode()
     for p in Path('/proc').glob('[0-9]*/cmdline'):
         try:a=p.read_bytes().split(b'\0')
         except OSError:continue

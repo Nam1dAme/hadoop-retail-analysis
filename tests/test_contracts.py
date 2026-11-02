@@ -95,3 +95,16 @@ def test_last_effective_batch_gradient_uses_actual_population(tmp_path):
         torch.nn.functional.binary_cross_entropy_with_logits(model(x).squeeze(-1),y).backward()
         assert torch.allclose(model.weight.grad,actual,atol=1e-12,rtol=0)
     assert len(observed)==len(set(observed))==13
+
+def test_orphan_java_is_identified_by_staging_path(tmp_path,monkeypatch):
+    import orchestration.control as control
+    from pathlib import Path as RealPath
+    run='12345678-1234-1234-1234-123456789abc'
+    proc=tmp_path/'proc';entry=proc/'42';entry.mkdir(parents=True)
+    command=entry/'cmdline'
+    command.write_bytes(b'/jdk/bin/java\0FsShell\0-put\0/input.csv\0/root/.source-'+run.encode()+b'.tmp/source.csv\0')
+    monkeypatch.setattr(control,'Path',lambda p:proc if p=='/proc' else RealPath(p))
+    assert control.live_java(run)
+    assert not control.live_java('aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee')
+    command.write_bytes(b'/usr/bin/python\0'+run.encode()+b'\0')
+    assert not control.live_java(run)
