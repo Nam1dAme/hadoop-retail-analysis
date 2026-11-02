@@ -104,3 +104,16 @@ def test_forecast_unknown_labels_model_scope_and_reader_permissions(api):
     with api['pool'].connection() as db,db.cursor() as q:
         with pytest.raises(pymysql.MySQLError):q.execute('INSERT INTO current_release VALUES(2,NULL,0)')
         with pytest.raises(pymysql.MySQLError):q.execute('CREATE TABLE forbidden_api_write(id INT)')
+
+
+def test_pool_reconnect_restores_server_query_limit(api):
+    pool=Pool(api['config'],ROOT/'var/secrets/test_reader.cnf',maximum=1)
+    with pool.connection() as db:
+        with db.cursor() as q:
+            q.execute('SELECT CONNECTION_ID() AS id,@@max_statement_time AS seconds');before=q.fetchone()
+        db.close()  # Close only this test's connection; the next checkout must reconnect.
+    with pool.connection() as db:
+        with db.cursor() as q:
+            q.execute('SELECT CONNECTION_ID() AS id,@@max_statement_time AS seconds');after=q.fetchone()
+    assert before['id']!=after['id']
+    assert before['seconds']==after['seconds']==5

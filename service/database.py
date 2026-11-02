@@ -22,9 +22,10 @@ class Pool:
                 db.ping(reconnect=True)
             except queue.Empty:
                 db = connect(self.config, self.credentials)
-                db._read_timeout = 5
-                with db.cursor() as q:
-                    q.execute('SET SESSION max_statement_time=5')
+            # Reconnection creates a new server session and discards session variables.
+            db._read_timeout = 5
+            with db.cursor() as q:
+                q.execute('SET SESSION max_statement_time=5')
             yield db
         except BaseException:
             if db:
