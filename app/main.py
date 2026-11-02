@@ -23,8 +23,8 @@ def changed():st.query_params['page']=st.session_state['page']
 def main():
     st.set_page_config(page_title='行为观察 · Behavior Analytics',page_icon='◫',layout='wide',initial_sidebar_state='auto')
     install_style()
-    if 'page' not in st.session_state:
-        requested=st.query_params.get('page','overview');st.session_state['page']=requested if requested in PAGES else 'overview'
+    requested=st.query_params.get('page','overview');requested=requested if requested in PAGES else 'overview'
+    if st.session_state.get('page')!=requested:st.session_state['page']=requested
     api=BehaviorAPI(os.environ.get('BEHAVIOR_API_URL','http://127.0.0.1:8010/api/v1'))
     with st.sidebar:
         st.html('<div class="brand"><div class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></div><div><strong>行为观察</strong><p>Behavior Analytics</p></div></div>')
