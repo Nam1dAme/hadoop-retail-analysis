@@ -9,8 +9,11 @@ import shutil
 import signal
 import subprocess
 import time
+import sys
 
 ROOT=Path(__file__).resolve().parents[1]
+sys.path.insert(0,str(ROOT))
+from orchestration.resources import host_free_bytes
 stop=False
 def finish(*args):
     global stop
@@ -22,6 +25,9 @@ with args.output.open('a',buffering=1) as out:
     while not stop:
         started=time.monotonic();mem={k.rstrip(':'):int(v.split()[0])*1024 for k,v in (line.split(None,1) for line in Path('/proc/meminfo').read_text().splitlines())}
         record=dict(observed_at=datetime.now(timezone.utc).isoformat(),mem_available=mem['MemAvailable'],swap_used=mem['SwapTotal']-mem['SwapFree'],linux_free=shutil.disk_usage(ROOT).free)
+        swap={key:int(value) for key,value in (line.split() for line in Path('/proc/vmstat').read_text().splitlines()) if key in ('pswpin','pswpout')}
+        record.update(swap)
+        record['host_free']=host_free_bytes()
         try:
             result=subprocess.run(['/usr/lib/wsl/lib/nvidia-smi','--query-gpu=memory.total,memory.used,utilization.gpu,temperature.gpu,power.draw','--format=csv,noheader,nounits'],capture_output=True,text=True,timeout=3)
             if result.returncode:raise OSError('nvidia-smi returned nonzero')

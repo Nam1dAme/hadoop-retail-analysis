@@ -12,6 +12,13 @@ class Lease:
     def __init__(self,config,credentials):
         self.config=config;self.credentials=credentials;self.db=None;self.stop=threading.Event();self.error=None;self.task=None
     def __enter__(self):
+        import shutil
+        from .resources import host_free_bytes
+        from .common import ROOT
+        Path(self.config['paths']['work_dir']).mkdir(parents=True,exist_ok=True)
+        host_free=host_free_bytes()
+        if shutil.disk_usage(ROOT).free<20*1024**3 or (host_free is not None and host_free<20*1024**3):
+            raise PipelineError('Disk reserve below 20 GiB; refuse starting a heavy task')
         self.db=connect(self.config,self.credentials)
         with self.db.cursor() as q:
             q.execute('SELECT GET_LOCK(%s,0) AS acquired',(LOCK,))
@@ -38,6 +45,9 @@ class Lease:
                 else:low_since=None
                 import shutil
                 if shutil.disk_usage(self.config['paths']['work_dir']).free<10*1024**3:raise PipelineError('Local disk reserve below 10 GiB')
+                from .resources import host_free_bytes
+                host_free=host_free_bytes()
+                if host_free is not None and host_free<10*1024**3:raise PipelineError('Host volume reserve below 10 GiB')
         except Exception as e:self.error=e
         finally:
             if db:db.close()
