@@ -51,9 +51,25 @@ def execute(args):
         return {'status':'DRY_RUN','command':args.command,'source':source,'baseline_version':BASELINE,'resource_busy':busy,'dependencies_checked':True,'plan':list(STAGES) if args.command in ('pipeline','resume') else [args.command]}
     work=Path(c['paths']['work_dir']);work.mkdir(parents=True,exist_ok=True)
     if args.command=='migrate':
-        backup=work/'backups'/('pre-migration-'+stamp().replace(':','')+'.sql');backup.parent.mkdir(parents=True,exist_ok=True)
-        database_backup(c,args.credentials,backup)
-        with connect(c,args.credentials) as db:return migrate(db)
+        def apply(db,guard=lambda:None):
+            guard()
+            backup=work/'backups'/('pre-migration-'+stamp().replace(':','')+'.sql');backup.parent.mkdir(parents=True,exist_ok=True)
+            database_backup(c,args.credentials,backup);guard()
+            # A populated-table index build is offline maintenance, not a five-second read API.
+            db._read_timeout=900
+            with db.cursor() as q:q.execute('SET SESSION max_statement_time=840')
+            result=migrate(db);guard();return result
+        with connect(c,args.credentials) as db,db.cursor() as q:
+            q.execute("SHOW TABLES LIKE 'resource_lease'");initialized=q.fetchone() is not None
+        if initialized:
+            with Lease(c,args.credentials) as lease:return apply(lease.db,lease.guard)
+        # Bootstrap precedes resource_lease creation, but still takes the same server-wide lock.
+        from .control import LOCK
+        with connect(c,args.credentials) as db,db.cursor() as q:
+            q.execute('SELECT GET_LOCK(%s,0) AS acquired',(LOCK,))
+            if q.fetchone()['acquired']!=1:raise LockBusy('Another heavy task owns resource lock')
+            try:return apply(db)
+            finally:q.execute('SELECT RELEASE_LOCK(%s)',(LOCK,))
     with connect(c,args.credentials) as db:
         require_current(db)
         if args.command=='status':
