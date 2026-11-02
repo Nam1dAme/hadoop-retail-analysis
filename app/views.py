@@ -58,7 +58,7 @@ def activity(api,release):
         submit=st.form_submit_button('查询用户活动')
     if submit:st.session_state['active_user']=user
     if st.session_state.get('active_user'):
-        table(api.get('/users/'+st.session_state['active_user']+'/activity',**params)['data'])
+        table(api.get('/users/'+st.session_state['active_user']+'/activity',**params)['data'],{'date':'日期','pv_count':'浏览次数','buy_count':'购买次数','cart_count':'加购次数','fav_count':'收藏次数','first_ts':'首条行为时间','last_ts':'末条行为时间'})
 
 
 def predictions(api,release):

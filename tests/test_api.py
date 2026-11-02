@@ -1,6 +1,6 @@
 """Contract tests against an isolated real MariaDB, not production release claims."""
 import configparser
-from datetime import datetime
+from datetime import datetime,timezone
 import getpass
 import json
 import os
@@ -71,6 +71,8 @@ def test_all_read_endpoints_and_bigints(api):
         assert response.json()['meta']['request_id']==response.headers['X-Request-ID']
     data=client.get('/api/v1/overview',params={'release_id':rid}).json()['data']
     assert data['pv_count']=='2' and data['uv']=='2' and data['pv_buy_ratio']==.5
+    user=client.get('/api/v1/users/001/activity',params={'release_id':rid}).json()['data'][0]
+    assert user['first_ts']==user['last_ts']==datetime.fromtimestamp(1511539200,timezone.utc).isoformat().replace('+00:00','Z')
     rows=client.get('/api/v1/trends',params={'release_id':rid,'granularity':'hour'}).json()['data']
     assert len(rows)==9*24*4 and sum(int(r['event_count']) for r in rows)==2
     activity=client.get('/api/v1/activity',params={'release_id':rid}).json()['data']

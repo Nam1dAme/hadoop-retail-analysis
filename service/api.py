@@ -263,6 +263,8 @@ def create_app(config=None,pool=None,cursor_key=None):
         ready(p.release_id)
         rows=db.all('SELECT date,pv_count,buy_count,cart_count,fav_count,first_ts,last_ts FROM user_daily WHERE release_id=%s AND user_id=%s AND date>=%s AND date<%s ORDER BY date',(str(p.release_id),user_id,p.start,p.end))
         if not rows:raise Fault(404,'NOT_FOUND','该用户在查询范围内没有活动记录。')
+        for row in rows:
+            for field in ('first_ts','last_ts'):row[field]=datetime.fromtimestamp(row[field],timezone.utc)
         return response(request,rows,p.release_id)
 
     @app.get('/api/v1/predictions')
