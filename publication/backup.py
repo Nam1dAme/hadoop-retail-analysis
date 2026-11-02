@@ -26,6 +26,9 @@ class DigestReader:
 
 def make_backup(lease):
     prepare_offline_checks(lease.db)
+    if (ROOT/'var/scale/verification.json').exists():
+        from .scale_audit import audit_scale
+        audit_scale(lease.guard)
     release=json.loads((ROOT/'var/production/release.json').read_text())
     with lease.db.cursor() as q:
         q.execute("SELECT * FROM data_release WHERE release_id=%s AND status='READY'",(release['release_id'],));row=q.fetchone()
@@ -68,7 +71,8 @@ def make_backup(lease):
         tar.add(dump,arcname='database.sql',recursive=False)
         local_files=[ROOT/'README.md',ROOT/'uv.lock',*sorted((ROOT/'config').rglob('*')),*sorted((ROOT/'var/history-rewrite').rglob('commit-map.json')),*sorted((ROOT/'var/history-rewrite').rglob('*.bundle'))]
         local_files += [ROOT/'var/production'/name for name in ('m123-verification.json','models.json','model-verification.json','forecast.json','release.json','release-verification.json','cuda-recovery-test.json','api-verification.json','entity-ranking-verification.json','api-load-test.json','permission-verification.json')]
-        if (ROOT/'var/scale/verification.json').exists():local_files.append(ROOT/'var/scale/verification.json')
+        for name in ('verification.json','audit.json'):
+            if (ROOT/'var/scale'/name).exists():local_files.append(ROOT/'var/scale'/name)
         for folder in ('browser','browser-selected-model'):
             local_files.extend(sorted((ROOT/'var/production'/folder).glob('*.json')))
             local_files.extend(sorted((ROOT/'var/production'/folder).glob('*.png')))
