@@ -19,9 +19,10 @@ with sync_playwright() as p:
             page.goto('http://127.0.0.1:8510/?page='+name,wait_until='domcontentloaded')
             page.get_by_role('heading',name=label,exact=True).wait_for(timeout=30000)
             page.get_by_text('数据版本已固定',exact=False).wait_for(timeout=30000)
-            # Wait for all initial API reads/charts and Streamlit's script runner to settle.
-            page.wait_for_timeout(2000)
-            page.locator('[data-testid="stStatusWidget"]').wait_for(state='hidden',timeout=60000)
+            # The marker is emitted only after the complete view has successfully returned.
+            page.locator(f'[data-behavior-page-ready="{name}"],[data-testid="stAlertContentError"],[data-testid="stException"]').first.wait_for(state='attached',timeout=30000)
+            page.evaluate('document.fonts.ready')
+            page.wait_for_timeout(1000)
             if page.locator('[data-testid="stException"]').count():raise AssertionError('Streamlit exception: '+name)
             faults=page.locator('[data-testid="stAlertContentError"]')
             if faults.count():raise AssertionError('Page error: '+name+' '+faults.all_text_contents()[0])

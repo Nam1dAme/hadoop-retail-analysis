@@ -41,7 +41,9 @@ def main():
     release=st.session_state.get('fixed_release');api.release=release
     if release:
         st.html('<div class="context-bar"><span class="context-status"><i class="context-dot"></i>数据版本已固定</span>'+f'<span>版本 <b>{h(release["release_id"])}</b></span><span>北京时间</span><span>2017-11-25 至 2017-12-04（不含）</span><span>购买行为预测</span></div>')
-        try:view(api,release)
+        try:
+            view(api,release)
+            st.html(f'<span data-behavior-page-ready="{h(page)}" hidden></span>')
         except ApiFault as fault:
             st.error(fault.message)
             if fault.request_id:st.caption('请求编号：'+fault.request_id)

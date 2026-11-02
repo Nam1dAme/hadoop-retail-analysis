@@ -117,3 +117,40 @@ def test_pool_reconnect_restores_server_query_limit(api):
             q.execute('SELECT CONNECTION_ID() AS id,@@max_statement_time AS seconds');after=q.fetchone()
     assert before['id']!=after['id']
     assert before['seconds']==after['seconds']==5
+
+
+def test_exact_range_ranking_bound_ties_and_pagination(api):
+    from datetime import date,timedelta
+    import random
+    from service.ranking import rank_entities
+    randomizer=random.Random(42);rid=api['release'];base=date(2017,11,25)
+    with connect(api['config'],ROOT/'var/secrets/test_writer.cnf') as db,db.cursor() as q:
+        values=[]
+        for day in range(4):
+            for i in range(100):
+                for kind in ('ITEM','CATEGORY'):
+                    for behavior in ('pv','buy','fav'):
+                        if behavior!='fav' and randomizer.random()<.3:continue
+                        count=1 if behavior=='fav' else randomizer.randrange(1,30)
+                        values.append((rid,base+timedelta(days=day),kind,str(1000+i),behavior,count))
+        q.executemany('INSERT INTO entity_daily VALUES(%s,%s,%s,%s,%s,%s)',values)
+    pool=api['pool']
+    for start,end in ((base,base+timedelta(days=1)),(base,base+timedelta(days=4)),(base+timedelta(days=1),base+timedelta(days=3))):
+        for kind in ('ITEM','CATEGORY'):
+            for behavior in ('pv','buy','fav'):
+                expected=pool.all('SELECT entity_id,SUM(event_count) AS event_count FROM entity_daily WHERE release_id=%s AND date>=%s AND date<%s AND entity_type=%s AND behavior_type=%s GROUP BY entity_id ORDER BY event_count DESC,entity_id ASC',(rid,start,end,kind,behavior))
+                expected=[dict(entity_id=row['entity_id'],event_count=int(row['event_count'])) for row in expected]
+                first=rank_entities(pool,rid,start,end,kind,behavior,11,chunk=7)
+                assert first==expected[:11]
+                position=[str(first[9]['event_count']),first[9]['entity_id'],10]
+                second=rank_entities(pool,rid,start,end,kind,behavior,11,position,chunk=7)
+                assert second==expected[10:21]
+    # Equal totals must still order IDs correctly across all pages, even without early pruning.
+    ordered=[];position=None
+    while True:
+        rows=rank_entities(pool,rid,base,base+timedelta(days=4),'ITEM','fav',17,position,chunk=7)
+        if not rows:break
+        ordered.extend(row['entity_id'] for row in rows)
+        position=[str(rows[-1]['event_count']),rows[-1]['entity_id'],len(ordered)]
+    assert ordered==[str(1000+i) for i in range(100)]
+    with pytest.raises(TimeoutError):rank_entities(pool,rid,base,base+timedelta(days=4),'ITEM','fav',10,chunk=7,max_candidates=5)

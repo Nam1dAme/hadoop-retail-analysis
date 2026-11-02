@@ -2,6 +2,7 @@
 from contextlib import contextmanager
 import queue
 import threading
+import time
 from orchestration.database import connect
 
 
@@ -12,8 +13,8 @@ class Pool:
         self.slots = threading.BoundedSemaphore(maximum)
 
     @contextmanager
-    def connection(self):
-        if not self.slots.acquire(timeout=5):
+    def connection(self,acquire_timeout=5):
+        if not self.slots.acquire(timeout=acquire_timeout):
             raise TimeoutError('Read-only connection pool is busy')
         db = None
         try:
@@ -37,10 +38,18 @@ class Pool:
                 self.idle.put_nowait(db)
             self.slots.release()
 
-    def all(self, sql, args=()):
-        with self.connection() as db, db.cursor() as q:
+    def all(self, sql, args=(), *, timeout=None):
+        deadline=time.monotonic()+timeout if timeout is not None else None
+        with self.connection(acquire_timeout=max(0,timeout) if timeout is not None else 5) as db, db.cursor() as q:
+            if deadline is not None:
+                remaining=deadline-time.monotonic()
+                if remaining<=0:raise TimeoutError('Read budget expired while acquiring connection')
+                db._read_timeout=remaining+.25
+                q.execute('SET SESSION max_statement_time=%s',(remaining,))
             q.execute(sql, args)
-            return list(q.fetchall())
+            result=list(q.fetchall())
+            if deadline is not None and time.monotonic()>deadline:raise TimeoutError('Read budget expired')
+            return result
 
     def one(self, sql, args=()):
         rows = self.all(sql, args)

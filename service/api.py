@@ -15,6 +15,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from orchestration.common import ROOT, BASELINE, fingerprint, load
 from .database import Pool
+from .ranking import rank_entities
 from .security import Cursors, CursorError
 
 COUNT_FIELDS = {'event_count','pv_count','buy_count','cart_count','fav_count','uv','pv_users','pv_buy_users',
@@ -231,11 +232,7 @@ def create_app(config=None,pool=None,cursor_key=None):
     def entities(request:Request,p:Annotated[EntityParams,Query()]):
         ready(p.release_id);position=signer.decode(p.cursor,context('entities',p)) if p.cursor else None
         def query():
-            args=[str(p.release_id),p.start,p.end,p.entity_type,p.behavior];having=''
-            if position:
-                count,entity_id,rank=position
-                having=' HAVING SUM(event_count)<%s OR (SUM(event_count)=%s AND entity_id>%s)';args+=[count,count,entity_id]
-            return db.all('SELECT entity_id,SUM(event_count) AS event_count FROM entity_daily WHERE release_id=%s AND date>=%s AND date<%s AND entity_type=%s AND behavior_type=%s GROUP BY entity_id'+having+' ORDER BY event_count DESC,entity_id ASC LIMIT %s',(*args,p.limit+1))
+            return rank_entities(db,str(p.release_id),p.start,p.end,p.entity_type,p.behavior,p.limit+1,position)
         rows=cache.get(('entities',context('entities',p),p.cursor),query)
         rows=[dict(r,rank=i+1+(int(position[2]) if position else 0)) for i,r in enumerate(rows)]
         return paged(request,p,'entities',rows,lambda r:[str(r['event_count']),r['entity_id'],r['rank']])
