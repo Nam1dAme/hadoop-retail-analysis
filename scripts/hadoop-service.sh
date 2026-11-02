@@ -22,12 +22,15 @@ PY
     ;;
   start)
     test -f var/hdfs/name/current/VERSION || { echo '请先执行 init'; exit 2; }
-    for service in namenode datanode resourcemanager nodemanager; do
+    for service in namenode datanode resourcemanager nodemanager historyserver; do
       case "$service" in
         namenode|datanode) tool=hdfs ;;
+        historyserver) tool=mapred ;;
         *) tool=yarn ;;
       esac
-      if "$tool" --daemon status "$service" >/dev/null 2>&1; then
+      # Hadoop 3.4.2 can return zero after printing "is stopped"; inspect its status text.
+      service_status=$("$tool" --daemon status "$service" 2>&1 || true)
+      if [[ "$service_status" == "$service is running as process "* ]]; then
         echo "$service 已运行"
       else
         setsid -w "$tool" --daemon start "$service"
@@ -45,9 +48,18 @@ for _ in range(60):
  except (OSError,ValueError):pass
  time.sleep(2)
 else:raise SystemExit('YARN节点未在120秒内就绪')
+for _ in range(60):
+ try:
+  with urllib.request.urlopen('http://127.0.0.1:19888/ws/v1/history/info',timeout=2) as r:
+   assert json.load(r)['historyInfo']
+  print('MapReduce HistoryServer 已就绪');break
+ except (OSError,ValueError,KeyError,AssertionError):pass
+ time.sleep(1)
+else:raise SystemExit('HistoryServer未在60秒内就绪')
 PYREADY
     ;;
   stop)
+    mapred --daemon stop historyserver
     yarn --daemon stop nodemanager
     yarn --daemon stop resourcemanager
     hdfs --daemon stop datanode
@@ -56,6 +68,7 @@ PYREADY
   status)
     hdfs dfsadmin -report
     yarn node -list
+    mapred --daemon status historyserver
     ;;
   *) echo '用法: hadoop-service.sh init|start|stop|status'; exit 2 ;;
 esac
