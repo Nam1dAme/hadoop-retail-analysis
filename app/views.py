@@ -87,7 +87,7 @@ def experiments(api,release):
         section('三种算法的实测对照','仅验证集决定算法、参数与阈值；测试集用于最终检查。')
         rows=[]
         for model in models:
-            row=dict(算法=model['algorithm'],设备=model['device'],参数量=model['parameter_count'],最佳轮次=model['best_epoch'] if model['best_epoch'] is not None else '无',阈值=model['threshold'],已选定=model['model_run_id']==data['selected_model_id'])
+            row=dict(算法=model['algorithm'],设备=model['device'],参数量=model['parameter_count'],最佳轮次=str(model['best_epoch']) if model['best_epoch'] is not None else '无',阈值=model['threshold'],已选定=model['model_run_id']==data['selected_model_id'])
             for metric in model['metrics']:
                 if metric['cohort']=='ALL' and metric['name'] in ('ap','roc_auc','logloss','f1'):row[metric['split']+' '+metric['name']]=metric['value']
             rows.append(row)
