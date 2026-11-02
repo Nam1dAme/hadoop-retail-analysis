@@ -21,9 +21,12 @@ from service.database import Pool
 
 
 def restore(lease,backup_manifest=None):
+    started=time.monotonic()
+    atomic_json(ROOT/'var/production/recovery.json',dict(status='RUNNING',started_at=stamp(),independent_backup_verified=False))
     report=json.loads(Path(backup_manifest or ROOT/'var/production/backup.json').read_text())
     with lease.db.cursor() as q:
         q.execute('SELECT release_id,generation FROM current_release WHERE singleton_id=1');original_current=q.fetchone()
+    if report['status']!='PASS':raise ManifestError('Recovery requires a fully verified backup')
     archive=Path(report['archive']).resolve(strict=True)
     if not archive.is_relative_to(ROOT/'var/backups') or sha(archive)!=report['sha256']:
         raise ManifestError('Untrusted or changed backup archive')
@@ -32,7 +35,7 @@ def restore(lease,backup_manifest=None):
     expected={x['path']:x for x in report['hdfs_files']};seen=set();storage=Hdfs(lease.config,lease);web=WebHdfs()
     counts=report['table_counts']
     if any(not table.replace('_','').isalnum() for table in counts):raise ManifestError('Unexpected backup table identifier')
-    started=time.monotonic();sql=directory/'database.sql';hdfs_bytes=0;server=None
+    sql=directory/'database.sql';hdfs_bytes=0;server=None
     try:
         with tarfile.open(archive,mode='r|gz') as tar:
             for member in tar:

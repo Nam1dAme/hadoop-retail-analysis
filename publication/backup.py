@@ -25,6 +25,8 @@ class DigestReader:
 
 
 def make_backup(lease):
+    started=time.monotonic()
+    atomic_json(ROOT/'var/production/backup.json',dict(status='RUNNING',started_at=stamp(),independent_backup_verified=False))
     prepare_offline_checks(lease.db)
     if (ROOT/'var/scale/verification.json').exists():
         from .scale_audit import audit_scale
@@ -64,19 +66,20 @@ def make_backup(lease):
     add(row['manifest_path'],len(release_manifest),hashlib.sha256(release_manifest).hexdigest())
     # DB dump includes immutable result tables and the corresponding control snapshot.
     # Use the existing migrator role only for this explicit offline administrative operation.
-    started=time.monotonic();dump=directory/'database.sql'
+    dump=directory/'database.sql'
     sql_backup(lease.config,ROOT/'var/secrets/migrator.cnf',dump)
     dump_hash=sha(dump);archive=directory/'backup.tar.gz'
     with os.fdopen(os.open(archive,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600),'wb') as output,gzip.GzipFile(fileobj=output,mode='wb',compresslevel=1,mtime=0) as compressed,tarfile.open(fileobj=compressed,mode='w|',copybufsize=1024**2) as tar:
         tar.add(dump,arcname='database.sql',recursive=False)
         local_files=[ROOT/'README.md',ROOT/'uv.lock',*sorted((ROOT/'config').rglob('*')),*sorted((ROOT/'var/history-rewrite').rglob('commit-map.json')),*sorted((ROOT/'var/history-rewrite').rglob('*.bundle'))]
-        local_files += [ROOT/'var/production'/name for name in ('m123-verification.json','models.json','model-verification.json','forecast.json','release.json','release-verification.json','cuda-recovery-test.json','api-verification.json','entity-ranking-verification.json','api-load-test.json','permission-verification.json')]
+        local_files += [ROOT/'var/production'/name for name in ('m123-verification.json','models.json','model-verification.json','forecast.json','release.json','release-verification.json','cuda-recovery-test.json','api-verification.json','entity-ranking-verification.json','api-load-test.json','permission-verification.json','cgroup-memory-observation.json')]
         for name in ('verification.json','audit.json'):
             if (ROOT/'var/scale'/name).exists():local_files.append(ROOT/'var/scale'/name)
-        for folder in ('browser','browser-selected-model'):
+        for folder in ('browser','browser-selected-model','browser-user-detail'):
             local_files.extend(sorted((ROOT/'var/production'/folder).glob('*.json')))
             local_files.extend(sorted((ROOT/'var/production'/folder).glob('*.png')))
         if (ROOT/'var/fixtures/hotspot-verification.json').exists():local_files.append(ROOT/'var/fixtures/hotspot-verification.json')
+        if (ROOT/'var/production/acceptance/status.json').exists():local_files.append(ROOT/'var/production/acceptance/status.json')
         bundle=directory/'source.bundle';subprocess.run(['git','bundle','create',str(bundle),'--all'],cwd=ROOT,check=True);local_files.append(bundle)
         for local in local_files:
             if local.is_file():tar.add(local,arcname='project/'+str(local.relative_to(ROOT)),recursive=False)
