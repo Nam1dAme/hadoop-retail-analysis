@@ -17,6 +17,10 @@ dependencies = [
 [dependency-groups]
 dev = ["pytest>=8,<9", "httpx>=0.28,<0.29"]
 
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+norecursedirs = ["var", ".venv", ".git", "jobs/target"]
+
 [tool.uv]
 package = false
 required-version = ">=0.13.1"

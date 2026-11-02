@@ -28,6 +28,13 @@ def test_exact_metrics_and_external_ties(tmp_path):
     rng=np.random.default_rng(42)
     p=rng.integers(0,10,200)/10;y=rng.integers(0,2,200)
     assert metrics(p,y,directory=tmp_path,chunk_size=7) == metrics(p,y,directory=tmp_path,chunk_size=65536)
+    expected_ap=0.
+    for threshold in np.unique(p):
+        expected_ap+=np.count_nonzero((p==threshold)&(y==1))/y.sum()*y[p>=threshold].mean()
+    pairs=[1. if a>b else .5 if a==b else 0. for a in p[y==1] for b in p[y==0]]
+    actual=metrics(p,y,directory=tmp_path,chunk_size=7)
+    assert actual['ap']==pytest.approx(expected_ap)
+    assert actual['roc_auc']==pytest.approx(np.mean(pairs))
 
 
 def fixture_batch(n=16):
