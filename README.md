@@ -2,7 +2,7 @@
 
 当前已完成环境及M1—M3开发，完整100,150,807行已通过Hadoop处理，分析和训练样本已生成。模型训练、版本发布与工作台在后续阶段实施。冻结设计见[文档入口](docs/README.md)。环境搭建记录见[执行报告](docs/execution/2026-11-02-environment.md)，数据处理结果见[M1—M3验收报告](docs/execution/2026-11-02-m123-acceptance.md)。
 
-当前源数据位于本项目`var/data/UserBehavior.csv`，是WSL本地文件，不是指向Windows挂载盘的符号链接。导入与环境锁脚本通过`config/development.toml`读取该路径。迁移前后的内容SHA256相同；历史基线、数据库来源记录与已发布产物清单中的旧路径记录当时的实际来源，不代表当前访问入口。数据文件位于Git忽略目录，不提交CSV。后续提交信息采用英文Conventional Commits：`type(scope): description`。
+当前源数据位于本项目`var/data/UserBehavior.csv`，是WSL本地文件，不是指向Windows挂载盘的符号链接。导入与环境锁脚本通过`config/development.toml`读取该路径。迁移前后的内容SHA256相同；历史基线、数据库来源记录与已发布产物清单中的旧路径记录当时的实际来源，不代表当前访问入口。数据文件位于Git忽略目录，不提交CSV。后续提交信息采用Conventional Commits：`type(scope): 中文描述`；type与scope保持英文，冒号后的描述使用中文，技术标识保留原样。
 
 ## 开发环境
 
