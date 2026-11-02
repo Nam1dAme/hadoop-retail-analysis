@@ -81,7 +81,7 @@ def stage_run(lease,batch,stage,inputs,parameters,executor=None):
             if metrics['run_id']!=run_id or metrics['stage']!=stage:raise ManifestError('Job identity differs')
             if app_id!=metrics['application_id']:raise ManifestError('Application registration mismatch')
             app=application(lease.config,app_id)
-            if not app or app['state']!='FINISHED' or app['finalStatus']!='SUCCEEDED':raise ManifestError('YARN application is not authoritatively successful')
+            if not app or app['name']!='behavior-'+stage+'-'+run_id or app['state']!='FINISHED' or app['finalStatus']!='SUCCEEDED':raise ManifestError('YARN application is not authoritatively successful')
             extra={'counters':metrics['counters']}
         if (local/'business.jar').exists():storage.put(local/'business.jar',temporary+'/business.jar')
         storage.write_json(temporary+'/config.json',params,local/'config.json')
@@ -103,7 +103,7 @@ def stage_run(lease,batch,stage,inputs,parameters,executor=None):
             lease.guard();q.execute("UPDATE task_run SET status='SUCCEEDED',finished_at=%s,updated_at=%s WHERE run_id=%s AND lease_generation=%s",(now(),now(),run_id,lease.generation))
         return manifest
     except BaseException as error:
-        if not published:
+        if not published and not isinstance(error,LockBusy):
             try:
                 lease.guard()
                 with db.cursor() as q:q.execute("UPDATE task_run SET status='FAILED',error_code=%s,finished_at=%s,updated_at=%s WHERE run_id=%s",(getattr(error,'code','TASK_FAILED'),now(),now(),run_id))

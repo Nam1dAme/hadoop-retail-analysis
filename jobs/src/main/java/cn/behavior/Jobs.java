@@ -50,6 +50,7 @@ public final class Jobs extends Configured implements Tool {
         j.setMapperClass(Samples.MomentMap.class);j.setReducerClass(Samples.MomentReduce.class);j.setMapOutputKeyClass(Text.class);j.setMapOutputValueClass(Text.class);j.setNumReduceTasks(1);break;
       default:throw new IllegalArgumentException("Unknown stage: "+stage);
     }
+    if(conf.getBoolean("behavior.test.fail.mapper",false))j.setMapperClass(FailureMap.class);
     FileInputFormat.setInputDirRecursive(j,true);FileInputFormat.addInputPaths(j,args[1]);FileOutputFormat.setOutputPath(j,new Path(args[2]));
     if(conf.getLong("behavior.split.bytes",0)>0)FileInputFormat.setMaxInputSplitSize(j,conf.getLong("behavior.split.bytes",0));
     if(!j.waitForCompletion(true))return 1;
@@ -59,6 +60,9 @@ public final class Jobs extends Configured implements Tool {
     FileSystem fs=new Path(args[2]).getFileSystem(conf);
     try(FSDataOutputStream out=fs.create(new Path(args[2]+"/_metrics.json"),false)){mapper.writeValue((OutputStream)out,n);}
     return 0;
+  }
+  public static final class FailureMap extends Mapper<Object,Object,Text,LongWritable>{
+    protected void setup(Context c)throws IOException{throw new IOException("Injected isolated mapper failure");}
   }
   private static void secondary(Job j,Class<? extends Writable> value){j.setMapOutputKeyClass(SortKey.class);j.setMapOutputValueClass(value);j.setPartitionerClass(SortKey.Partition.class);j.setGroupingComparatorClass(SortKey.Group.class);}
   public static void main(String[] args)throws Exception{System.exit(ToolRunner.run(new Jobs(),args));}

@@ -8,7 +8,7 @@ import subprocess
 import time
 import urllib.request
 import urllib.error
-from .common import ROOT,runtime_env,PipelineError,ManifestError,encode
+from .common import ROOT,runtime_env,PipelineError,ManifestError,LockBusy,encode
 
 JAR=ROOT/'jobs/target/behavior-jobs.jar'
 class Hdfs:
@@ -74,9 +74,12 @@ def run_job(stage,inputs,output,params,lease,log,update_app):
     args=['hadoop','jar',params.get('jar_path',str(JAR)),'cn.behavior.Jobs',f'-Dbehavior.run.id={params["run_id"]}',f'-Dbehavior.reducers={params["reducers"]}']
     if params.get('source_sha256'):args.append('-Dbehavior.source.sha256='+params['source_sha256'])
     if stage=='J01' and params.get('split_bytes'):args.append('-Dbehavior.split.bytes='+str(params['split_bytes']))
+    inject=lease.config.get('synthetic',False) and os.environ.get('BEHAVIOR_TEST_FAIL_STAGE')==stage
+    if inject:args.append('-Dbehavior.test.fail.mapper=true')
     args+=['-Dfs.defaultFS='+lease.config['hdfs']['uri'],'-Dmapreduce.job.tags=behavior',stage,','.join(x['path'] for x in inputs),output]
     log=Path(log);log.parent.mkdir(parents=True,exist_ok=True);app_id=None
     with log.open('w') as out, log.open() as watch:
+        if inject:out.write('TEST_INJECTION: isolated mapper failure\n');out.flush()
         p=subprocess.Popen(args,env=runtime_env(),stdout=out,stderr=subprocess.STDOUT,start_new_session=True)
         buffer=''
         try:
@@ -87,12 +90,24 @@ def run_job(stage,inputs,output,params,lease,log,update_app):
                 if p.poll() is not None:break
                 time.sleep(.5)
             if p.returncode:raise PipelineError(f'{stage} failed; inspect {log}')
-        except BaseException:
+        except BaseException as error:
             if p.poll() is None:
                 os.killpg(p.pid,signal.SIGTERM)
                 try:p.wait(timeout=10)
                 except subprocess.TimeoutExpired:os.killpg(p.pid,signal.SIGKILL);p.wait()
             if app_id:
-                subprocess.run(['yarn','application','-kill',app_id],env=runtime_env(),stdout=out,stderr=out,timeout=30)
+                terminal=False;killed=False
+                for retry in range(30):
+                    try:info=application(lease.config,app_id)
+                    except Exception as state_error:raise LockBusy('Application terminal state unconfirmed') from state_error
+                    if info and info['state'] in ('FINISHED','FAILED','KILLED'):
+                        terminal=True;break
+                    # 非零退出可比RM终态早到达，先允许AM完成注销；取消则及时终止。
+                    if not killed and (retry>=10 or isinstance(error,LockBusy)):
+                        try:subprocess.run(['yarn','application','-kill',app_id],env=runtime_env(),stdout=out,stderr=out,timeout=30)
+                        except subprocess.TimeoutExpired:raise LockBusy('Application cancellation unconfirmed') from None
+                        killed=True
+                    time.sleep(.5)
+                if not terminal:raise LockBusy('Application terminal state unconfirmed')
             raise
     return app_id
