@@ -3,7 +3,7 @@
   "hadoop": "Hadoop 3.4.2",
   "web_dependencies": "PASS",
   "baseline": "UBA-DOC-1.0.0",
-  "observed_at": "2026-11-01T19:13:25.288533+00:00",
+  "observed_at": "2026-11-02T13:22:12.305883+00:00",
   "python": "3.12.3",
   "packages": {
     "rich": "13.9.4",
@@ -70,10 +70,10 @@
     "pandas": "2.2.3",
     "python-dateutil": "2.9.0.post0",
     "nvidia-curand-cu12": "10.3.5.147",
+    "pyarrow": "19.0.1",
     "toml": "0.10.2",
     "iniconfig": "2.3.1",
     "charset-normalizer": "3.5.2",
-    "pyarrow": "26.0.0",
     "anyio": "4.15.1",
     "networkx": "3.7",
     "narwhals": "2.27.1",
@@ -105,11 +105,11 @@
     "max_connections": 30,
     "role_isolation": "PASS"
   },
-  "rss_peak_mib": 1472.08203125,
+  "rss_peak_mib": 1470.640625,
   "status": "PASS",
-  "code_commit": "0cd14190cd809444a1133c9291ae0b600469eb4d",
-  "nvidia_smi": "NVIDIA GeForce RTX 4060 Laptop GPU, 566.07, 8188, 1344",
-  "uv_lock_sha256": "cb66c547d880b5a23098811723883f2378558bc8c7431510619086ea24de24d3",
+  "code_commit": "3c2b1cac8f2692fae44fad3325c5bc510aa396a5",
+  "nvidia_smi": "NVIDIA GeForce RTX 4060 Laptop GPU, 566.07, 8188, 1683",
+  "uv_lock_sha256": "4211668fb874631411c4024c68d590c10e3b57024973a309041f8df4a802daa1",
   "toolchain_lock_sha256": "3f030b627d9f1f28e3493fde12a5894dacb6f26ed81889fb4ced7033c39027d0",
   "config_hashes": {
     "config/development.toml": "ca8a5c72e38f8860e4dbbe81fc7717ca7df9b2d42eaa7a7ae6ff7f4d6ec50801",
@@ -118,19 +118,41 @@
     "config/hadoop/hadoop-env.sh": "f808fc694341adf5399d6b31c0dc8918c197f460a0fef4fc9b765fd705990c01",
     "config/hadoop/hdfs-site.xml": "35f4a7300ac29c53fd3ae5ce6c06a26503be1511f4c69538535ede1581fe524d",
     "config/hadoop/log4j.properties": "220c1cc06b1d7802052a9ab2959f66f875f664e25f4f98e05ab86120af34e644",
-    "config/hadoop/mapred-site.xml": "66f31214f7b8e4c1fe502f9610ccfbe743461bca4c443c85186ee3f355549470",
+    "config/hadoop/mapred-site.xml": "1f42686e1758c8c6473940c0f0dfb4a86d691eb11ec30aedfa3acf1d3da51a58",
     "config/hadoop/yarn-site.xml": "5e4c4537ae0f2dec6d0e600fdaa9284ba05f2a264b4ae6ddec0a3ffc7fb9a3db",
     "config/toolchain.lock.json": "3f030b627d9f1f28e3493fde12a5894dacb6f26ed81889fb4ced7033c39027d0"
   },
   "verifier_hashes": {
-    "scripts/check-environment.py": "ffdb36523055e4ec4fd4c944b4b8cd829a1dc64a2343040377b4222b690caa0c",
+    "scripts/continue-acceptance.py": "4dc4af9a5a0773b01eac145b9d1672148581fca0a5f75956c3c4017b1c1c04bb",
+    "scripts/test-jobs.sh": "ceca3e1d3b0758528552d9960eb130e923cd843ef058c62c461e4c3ca1514863",
+    "scripts/retention-plan.py": "4e68122761f16cf5c76ee6e633d7e79d87fd28dc693d7181af91fa09f3abe9e9",
+    "scripts/setup-scale.py": "7c0ae925427632c40656f1e9926d3886d4d5591b48132a878b92b4be43584dd1",
+    "scripts/check-environment.py": "3604893c5b2f55f855f62a2e262bd370f770edc9a68ca4a3db15d6f3836f88a6",
+    "scripts/verify-release.py": "4eb247a06b5cfbb8fd8fc8f7260266949c0183d1c9b244fa5adea56289ff8405",
+    "scripts/setup-test-database.py": "d48cc135c2f59e58fe00df19db622c22e31f00897331156b79916807257ee6e2",
+    "scripts/train-models.py": "52c7aa8b5f64e28e95df1d5e4e6f94c794d08acaee8bcfffde7222b0bdc12db5",
+    "scripts/load-test-api.py": "cb31136f9b8b4da28ec49e16fe6a00b09550e99a921af647edefa3647d7cc12e",
+    "scripts/run-scale.py": "39b3f71a59d8e09de945de262d5ab9d60ee5d15dfe545fdf61d332beffdbc7bb",
+    "scripts/build-jobs.sh": "b6e888b7b531ea1e6d02e41e60054008e3deab466fcaea89baf725411c9fc754",
     "scripts/bootstrap-tools.py": "c57b0ef5e5650d74cd0a4b6f8aae36b5a37b248c8e8a0f6a68da330b3c4a3d57",
+    "scripts/run-m123.py": "861490ff005dfc2011084e367589ecb1523ae7e7c49911729c32a735af7ced9c",
     "scripts/freeze-environment.py": "bf0aa7ef3a0e79e836dbb0ed9cdd144105cf214516800cab7c7ee18879ec32dc",
-    "scripts/hadoop-service.sh": "4befc2628ae6b9d41c862b47ba58d028cf0a976dbcc27e28e7040c027ad77c5f",
+    "scripts/hadoop-service.sh": "aeb7225cdacf5803b0dbb8773c446c26a623c4bdea1a688089be1f28263929c7",
+    "scripts/publish-results.py": "3b22de12febc61709bff64be471680a5997ca9713d4af5194489e15f8b03d9fc",
+    "scripts/subset-ui-fonts.py": "8aeade89e22b323e4cbfc00788531f511c392e296e72ea2fdc736367e3b2f1b0",
+    "scripts/backup-release.py": "11057e4d292c22905d23f395ceeb833f1c6d2d950bd8e5ba006eae6b6226b730",
+    "scripts/restore-backup.py": "97a758e0facad03e5511012ce8ff18d1a8595833ec6cc4584f0e2f79f2e3ec69",
+    "scripts/setup-loader.py": "e44011a4832bf0a91595b898892ce1c72265a76dcf1ab2647b5762294ac204be",
+    "scripts/monitor-resources.py": "e4739b9ecbfedea11ee59cbbe3bb2bb969a3cfae2d81a89e58338d576a95d05f",
+    "scripts/verify-m123.py": "59ad720ab8d632c0309119b679d3b6ca81f76699956d1ce9df75fb68a63bbf26",
+    "scripts/verify-browser.py": "85b9e70991edaff402d7cf327190c0b4e3cd1c72c8abeed95cf9b6997873f974",
     "scripts/check-hadoop.sh": "74f428c18ab89415828a2ac4fa00f7f3d87fd78e79773341bb7a3e337b2dc136",
-    "scripts/database-service.py": "95a0121434312f8b69d6f31b8b51e774d122e93356270c323cceae7849c67257",
+    "scripts/database-service.py": "fef42c787421344bf472ed798e147e5f22bf4fa8b3ef802cfa5ed03e536538da",
     "scripts/check-host-storage.ps1": "b158d147f2f2b29e52a5eb230a6e6f3d38f9ac66a368f7ce9d408a9813e824cf",
+    "scripts/web-service.py": "544b868adf3fd4a38a95ccd752e6ed93e855f86bb5ae4048e4a172e56b180e7b",
+    "scripts/continue-release.py": "97d82faee288ce7c03345e8a827513df5901ea3fd55667ea349e5a352f0a8254",
     "scripts/dev-env.sh": "a07b483a048c57c9f84278ce438492fee35551236b2cc593d56eba1dd88c95f1",
+    "scripts/verify-models.py": "ebb3b4ba34e23e70d9f7d6eff768fe46d845da921ce7280101bec2f6c8594c51",
     "scripts/java/BehaviorEnvironmentProbe.java": "2264b59483e7b237b0635c8d5a8493d9745960b53d848f731831c2c8da129b98"
   },
   "source": {
@@ -164,19 +186,5 @@
       "pv": "2"
     }
   },
-  "freeze_commit": "b9dcdfd30a4d8910493d42fcfcb35155f5fe56f9",
-  "source_relocation": {
-    "observed_at": "2026-11-02T07:51:40.950275+00:00",
-    "old_path": "/mnt/e/UserBehavior/UserBehavior.csv",
-    "new_path": "/home/hadoop/hadoop-retail-analysis/var/data/UserBehavior.csv",
-    "bytes": 3672347465,
-    "sha256": "46fdd7d389c1ddc7922eb7d9014af5573a4a3045da28c6c46197636873d8f1a9",
-    "destination_verified": true,
-    "source_removed": true,
-    "previous_environment_sha256": "4e7ffc8b880652ecf29dc513fb3dc6922acff1fb85e13c41106f5b8dacff5c1a",
-    "note": "Source relocation only; earlier probe measurements retain their original timestamps.",
-    "updated_batches": [
-      "1c577aba-46f2-4710-b296-5f29ac842921"
-    ]
-  }
+  "freeze_commit": "3c2b1cac8f2692fae44fad3325c5bc510aa396a5"
 }
