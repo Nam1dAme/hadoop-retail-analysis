@@ -112,7 +112,7 @@
   "uv_lock_sha256": "cb66c547d880b5a23098811723883f2378558bc8c7431510619086ea24de24d3",
   "toolchain_lock_sha256": "3f030b627d9f1f28e3493fde12a5894dacb6f26ed81889fb4ced7033c39027d0",
   "config_hashes": {
-    "config/development.toml": "ffb9a482065ca83adc578c1308ee96a95e56dac139c2f1c66f805f8ca24d6ab7",
+    "config/development.toml": "ca8a5c72e38f8860e4dbbe81fc7717ca7df9b2d42eaa7a7ae6ff7f4d6ec50801",
     "config/hadoop/capacity-scheduler.xml": "59c0ce15a72f3dc1729880bfbd26030ded0e79dbe3f86b40aae5e763a61df430",
     "config/hadoop/core-site.xml": "3a3f2b37095d21166a5d54e86d79569b0971cff493b87995629477f90a81197c",
     "config/hadoop/hadoop-env.sh": "f808fc694341adf5399d6b31c0dc8918c197f460a0fef4fc9b765fd705990c01",
@@ -125,7 +125,7 @@
   "verifier_hashes": {
     "scripts/check-environment.py": "ffdb36523055e4ec4fd4c944b4b8cd829a1dc64a2343040377b4222b690caa0c",
     "scripts/bootstrap-tools.py": "c57b0ef5e5650d74cd0a4b6f8aae36b5a37b248c8e8a0f6a68da330b3c4a3d57",
-    "scripts/freeze-environment.py": "ed52c6c85557c9e70c93f9b000411a8182e167fb7641afa5e7d9fd1e180e1a85",
+    "scripts/freeze-environment.py": "bf0aa7ef3a0e79e836dbb0ed9cdd144105cf214516800cab7c7ee18879ec32dc",
     "scripts/hadoop-service.sh": "4befc2628ae6b9d41c862b47ba58d028cf0a976dbcc27e28e7040c027ad77c5f",
     "scripts/check-hadoop.sh": "74f428c18ab89415828a2ac4fa00f7f3d87fd78e79773341bb7a3e337b2dc136",
     "scripts/database-service.py": "95a0121434312f8b69d6f31b8b51e774d122e93356270c323cceae7849c67257",
@@ -134,7 +134,7 @@
     "scripts/java/BehaviorEnvironmentProbe.java": "2264b59483e7b237b0635c8d5a8493d9745960b53d848f731831c2c8da129b98"
   },
   "source": {
-    "path": "/mnt/e/UserBehavior/UserBehavior.csv",
+    "path": "/home/hadoop/hadoop-retail-analysis/var/data/UserBehavior.csv",
     "bytes": 3672347465,
     "sha256": "46fdd7d389c1ddc7922eb7d9014af5573a4a3045da28c6c46197636873d8f1a9"
   },
@@ -164,5 +164,19 @@
       "pv": "2"
     }
   },
-  "freeze_commit": "b9dcdfd30a4d8910493d42fcfcb35155f5fe56f9"
+  "freeze_commit": "b9dcdfd30a4d8910493d42fcfcb35155f5fe56f9",
+  "source_relocation": {
+    "observed_at": "2026-11-02T07:51:40.950275+00:00",
+    "old_path": "/mnt/e/UserBehavior/UserBehavior.csv",
+    "new_path": "/home/hadoop/hadoop-retail-analysis/var/data/UserBehavior.csv",
+    "bytes": 3672347465,
+    "sha256": "46fdd7d389c1ddc7922eb7d9014af5573a4a3045da28c6c46197636873d8f1a9",
+    "destination_verified": true,
+    "source_removed": true,
+    "previous_environment_sha256": "4e7ffc8b880652ecf29dc513fb3dc6922acff1fb85e13c41106f5b8dacff5c1a",
+    "note": "Source relocation only; earlier probe measurements retain their original timestamps.",
+    "updated_batches": [
+      "1c577aba-46f2-4710-b296-5f29ac842921"
+    ]
+  }
 }

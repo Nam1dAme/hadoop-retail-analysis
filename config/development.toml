@@ -1,6 +1,6 @@
 baseline_version = "UBA-DOC-1.0.0"
 [source]
-path = "/mnt/e/UserBehavior/UserBehavior.csv"
+path = "/home/hadoop/hadoop-retail-analysis/var/data/UserBehavior.csv"
 [database]
 host = "127.0.0.1"
 port = 3307

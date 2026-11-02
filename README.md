@@ -2,6 +2,8 @@
 
 当前已完成环境及M1—M3开发，完整100,150,807行已通过Hadoop处理，分析和训练样本已生成。模型训练、版本发布与工作台在后续阶段实施。冻结设计见[文档入口](docs/README.md)。环境搭建记录见[执行报告](docs/execution/2026-11-02-environment.md)，数据处理结果见[M1—M3验收报告](docs/execution/2026-11-02-m123-acceptance.md)。
 
+当前源数据位于本项目`var/data/UserBehavior.csv`，是WSL本地文件，不是指向Windows挂载盘的符号链接。导入与环境锁脚本通过`config/development.toml`读取该路径。迁移前后的内容SHA256相同；历史基线、数据库来源记录与已发布产物清单中的旧路径记录当时的实际来源，不代表当前访问入口。数据文件位于Git忽略目录，不提交CSV。后续提交信息采用英文Conventional Commits：`type(scope): description`。
+
 ## 开发环境
 
 本机使用 Python 3.12.3、PyTorch 2.6.0+cu124、Java 11、Hadoop 3.4.2、MariaDB 10.11。Java/Hadoop 位于本项目 `var/tools`，Python 位于 `.venv`。驱动、CUDA安装和MariaDB程序复用宿主；数据库数据、账号、HDFS数据及所有配置独立。
