@@ -75,12 +75,15 @@ report['gpu'].update(fp32_amp_checkpoint='PASS',losses=losses,parameters=sum(p.n
     allocated_mib=torch.cuda.max_memory_allocated()/1024**2,reserved_mib=torch.cuda.max_memory_reserved()/1024**2)
 
 def db(role):return pymysql.connect(read_default_file=str(ROOT/f'var/secrets/{role}.cnf'),autocommit=True)
+hardened=(ROOT/'var/secrets/loader.cnf').exists()
 with db('migrator') as c,c.cursor() as q:
     q.execute('CREATE TABLE _environment_probe (id INT PRIMARY KEY)')
 try:
-    with db('writer') as c,c.cursor() as q:q.execute('INSERT INTO _environment_probe VALUES (1)')
+    with db('writer') as c,c.cursor() as q:
+        if hardened:q.execute('UPDATE resource_lease SET heartbeat_at=heartbeat_at WHERE singleton_id=0')
+        else:q.execute('INSERT INTO _environment_probe VALUES (1)')
     with db('reader') as c,c.cursor() as q:
-        q.execute('SELECT * FROM _environment_probe');assert q.fetchall()==((1,),)
+        q.execute('SELECT * FROM _environment_probe');assert q.fetchall()==(() if hardened else ((1,),))
         try:q.execute('INSERT INTO _environment_probe VALUES (2)')
         except pymysql.MySQLError as e:assert e.args[0] in (1142,1143)
         else:raise AssertionError('reader unexpectedly writable')

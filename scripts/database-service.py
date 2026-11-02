@@ -62,7 +62,8 @@ def init():
                 with os.fdopen(fd,'w') as f:f.write(text)
             user=f'behavior_{role}'
             q.execute('CREATE USER IF NOT EXISTS %s@%s IDENTIFIED BY %s',(user,'127.0.0.1',password))
-            q.execute(f'GRANT {grants} ON behavior_analytics.* TO %s@%s',(user,'127.0.0.1'))
+            effective='SELECT' if role=='writer' and (SECRET/'loader.cnf').exists() else grants
+            q.execute(f'GRANT {effective} ON behavior_analytics.* TO %s@%s',(user,'127.0.0.1'))
     print('独立数据库及三个项目账号已就绪；凭据仅写入var/secrets')
 
 def main():
