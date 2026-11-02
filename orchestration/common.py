@@ -39,8 +39,8 @@ def load(path):
     work=Path(c.get('paths',{}).get('work_dir',ROOT/'var/production')).resolve()
     if not work.is_relative_to(ROOT/'var'):raise ConfigError('work_dir must be inside project var')
     c['paths']={'work_dir':str(work)}
-    if c.get('synthetic',False) and (c['database']['name']=='behavior_analytics' or root=='/behavior/v1' or work==ROOT/'var/production'):
-        raise ConfigError('Synthetic work requires isolated DB, HDFS and work_dir')
+    if (c.get('synthetic',False) or c.get('benchmark',False)) and (c['database']['name']=='behavior_analytics' or root=='/behavior/v1' or work==ROOT/'var/production'):
+        raise ConfigError('Synthetic/benchmark work requires isolated DB, HDFS and work_dir')
     return c
 
 def runtime_env():

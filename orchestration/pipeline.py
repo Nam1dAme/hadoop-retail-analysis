@@ -96,7 +96,7 @@ def stage_run(lease,batch,stage,inputs,parameters,executor=None):
             if isinstance(value,list):return [relocate(v) for v in value]
             return value
         extra=relocate(extra)
-        manifest={'output_path':final,'baseline_version':BASELINE,'schema_version':'1.0','policy_version':POLICY,'run_id':run_id,**identity,'inputs':inputs,'outputs':outputs,'config':params,'created_at':stamp(),'application_id':app_id,'synthetic':lease.config.get('synthetic',False),'sampled':False,'status':'SUCCEEDED',**extra}
+        manifest={'output_path':final,'baseline_version':BASELINE,'schema_version':'1.0','policy_version':POLICY,'run_id':run_id,**identity,'inputs':inputs,'outputs':outputs,'config':params,'created_at':stamp(),'application_id':app_id,'synthetic':lease.config.get('synthetic',False),'sampled':lease.config.get('sampled',False),'status':'SUCCEEDED',**extra}
         storage.write_json(temporary+'/manifest.json',manifest,local/'manifest.json');lease.guard();storage.rename(temporary,final);published=True
         if os.environ.get('BEHAVIOR_TEST_CRASH_AFTER_RENAME')==stage and lease.config.get('synthetic',False):os._exit(86)
         with db.cursor() as q:
