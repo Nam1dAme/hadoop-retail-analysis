@@ -58,7 +58,7 @@ def stage_run(lease,batch,stage,inputs,parameters,executor=None):
             with db.cursor() as q:q.execute("UPDATE task_run SET status='FAILED',error_code='ABANDONED_ATTEMPT',finished_at=%s,updated_at=%s WHERE run_id=%s",(now(),now(),row['run_id']))
     run_id=str(uuid.uuid4());attempt=previous[0]['attempt']+1 if previous else 1
     parent=previous[0]['run_id'] if previous else None
-    root=lease.config['hdfs']['root'];branch='facts' if stage=='J01' else 'samples' if stage in ('J05','J06','E01') else 'reports' if stage in ('I00','J02','Q01','A01') else 'aggregates'
+    root=lease.config['hdfs']['root'];branch='facts' if stage=='J01' else 'samples' if stage in ('J05','J06','E01') else 'predictions' if stage=='P01' else 'reports' if stage in ('I00','J02','Q01','A01') else 'aggregates'
     final=f'{root}/{branch}/batch_id={batch}/{stage}/run_id={run_id}'
     temporary=str(Path(final).parent/('.'+run_id+'.tmp'))
     local=Path(lease.config['paths']['work_dir'])/'runs'/run_id;local.mkdir(parents=True,exist_ok=False)
