@@ -13,7 +13,7 @@ def install_style():
 def h(value):return escape(str(value),quote=True)
 
 def empty(title,message):
-    st.html(f'<div class="empty-state"><span class="empty-symbol" aria-hidden="true">◫</span><h3>{h(title)}</h3><p>{h(message)}</p></div>')
+    st.html(f'<div class="empty-state"><h3>{h(title)}</h3><p>{h(message)}</p></div>')
 
 def section(title,note=''):
     st.html(f'<div class="section-title"><h2>{h(title)}</h2><p>{h(note)}</p></div>')
