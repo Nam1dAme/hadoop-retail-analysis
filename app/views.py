@@ -117,7 +117,7 @@ def experiments(api,release):
             with b:st.plotly_chart(charts.lines(model['history'],'epoch',[('validation_ap','验证 AP','#3159D6')]),use_container_width=True)
         else:empty('固定分数基线','所有用户使用训练集购买正例率作为分数，不进行参数训练。')
     with st.container(key='panel_model_resources'):
-        section('资源与公平速度对照','FP32 CPU/GPU 对照与正式 AMP 训练分别记录。GPU 更慢也如实展示。')
+        section('资源与公平速度对照','GRU 的 FP32 CPU/GPU 对照与当前模型的正式训练分别记录。GPU 更慢也如实展示。')
         metrics([('训练耗时',f"{float(model['training_seconds'] or 0):,.1f} 秒",'包含训练与验证'),('显存分配峰值',f"{float(model['peak_allocated_mib'] or 0):,.1f} MiB",'不等于整张显卡占用'),('进程 RSS 峰值',f"{float(model['rss_mib'] or 0):,.1f} MiB",'本进程测量')])
         table(model['benchmarks'])
         with st.expander('参数与分人群评价'):
