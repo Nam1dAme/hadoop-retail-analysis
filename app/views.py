@@ -94,6 +94,20 @@ def experiments(api,release):
         table(rows)
         st.caption(data['selection_reason'])
     model=st.selectbox('查看实验详情',models,format_func=lambda r:r['algorithm'])
+    with st.container(key='panel_calibration'):
+        section('预测分数与实际购买比例','每个概率桶同时报告样本数；空桶不当作零购买率。测试结果只用于检查，不改变已固定阈值。')
+        split=st.selectbox('评价集合',['VALIDATION','TEST'],format_func=lambda v:'验证集' if v=='VALIDATION' else '测试集')
+        cohort=st.selectbox('用户人群',['ALL','SEEN_TRAIN','UNSEEN_TRAIN'],format_func=lambda v:{'ALL':'全部用户','SEEN_TRAIN':'训练时已出现','UNSEEN_TRAIN':'训练时未出现'}[v])
+        bins=model.get('calibration',{}).get(split,{}).get(cohort,[])
+        if bins:
+            a,b=st.columns(2)
+            with a:st.plotly_chart(charts.lines(bins,'mean_score',[('observed_rate','实际购买比例','#16838B')]),use_container_width=True)
+            with b:table(bins,{'start':'分数下界','end':'分数上界','count':'样本数','mean_score':'平均分数','observed_rate':'实际购买比例'})
+        else:empty('没有可展示的校准分桶','发布时接入已封存的真实分桶结果；没有样本的人群留空。')
+        values={m['name']:m['value'] for m in model['metrics'] if m['split']==split and m['cohort']==cohort}
+        if all(values.get(k) is not None for k in ('tp','fp','fn','tn')):
+            table([{'实际情况':'没有购买','预测没有购买':int(values['tn']),'预测购买':int(values['fp'])},
+                   {'实际情况':'有购买','预测没有购买':int(values['fn']),'预测购买':int(values['tp'])}])
     with st.container(key='panel_training'):
         section('训练过程','CONSTANT 没有可训练参数，因此没有训练曲线。')
         if model['history']:
@@ -118,7 +132,13 @@ def quality(api,release):
         table(data['metrics'],{'name':'检查项','dimension':'维度','value_count':'数量'})
     with st.container(key='panel_jobs'):
         section('Hadoop 与控制任务','带 application ID 的行是真实 YARN 作业；其他行为是控制、审计或导出阶段。')
-        pagination(api,'/tasks','task_rows',{}, {'stage':'阶段','attempt':'尝试次数','status':'状态','application_id':'YARN 应用','started_at':'开始时间','finished_at':'结束时间','error_code':'错误代码','run_id':'运行编号'})
+        rows=pagination(api,'/tasks','task_rows',{}, {'stage':'阶段','attempt':'尝试次数','status':'状态','application_id':'YARN 应用','started_at':'开始时间','finished_at':'结束时间','error_code':'错误代码','run_id':'运行编号','performance':'Hadoop 计数器'})
+        applications=[r for r in rows if r['application_id']]
+        if applications:
+            with st.expander('查看 YARN 作业证据'):
+                task=st.selectbox('作业',applications,format_func=lambda r:r['stage']+' / '+r['application_id'])
+                if task.get('performance'):st.json(task['performance'])
+                st.link_button('打开 YARN 应用详情','http://127.0.0.1:18088/cluster/app/'+task['application_id'])
         st.caption('HDFS 负责归档；YARN 管理作业资源；MapReduce 负责清洗、统计和时间样本。GPU 训练由独立 PyTorch 进程执行。')
 
 
@@ -131,6 +151,6 @@ def versions(api,release):
         st.write('观察期：北京时间 2017-11-25 至 2017-12-04，结束边界不包含在内。数据为抽样历史日志，不代表全站或长期情况。')
         st.write('训练集：11-27 至 11-30；验证集：12-01；测试集：12-02。每个样本使用前 48 小时行为，观察随后 24 小时是否购买。')
         st.write('没有金额、订单号、商品名称或曝光信息，不能计算 GMV、客单价或真实曝光点击率。用户可跨日期出现，这里检验时间泛化，另报告是否在训练集中出现。')
-        st.write('当前为单机伪分布式，HDFS 副本 1，不提供硬件故障高可用。独立备份与恢复能力以执行验收为准。')
+        st.write('当前为单机伪分布式，HDFS 副本 1，不提供硬件故障高可用。当前没有独立备份介质；本地恢复演练与磁盘故障保护分别验收。')
     report=api.get('/reports/summary')['data']
     st.download_button('下载汇总报告',json.dumps(report,ensure_ascii=False,indent=2),file_name='behavior-summary.json',mime='application/json')

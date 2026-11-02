@@ -36,6 +36,8 @@ def public(value, key=''):
         return value.isoformat()
     if key in COUNT_FIELDS:
         return str(int(value))
+    if key.isupper() and isinstance(value,int):
+        return str(value)
     return float(value) if isinstance(value,Decimal) else value
 
 
@@ -288,6 +290,14 @@ def create_app(config=None,pool=None,cursor_key=None):
         result['config']=json.loads(row['config_json']);result['hardware']=json.loads(row['hardware_json'])
         result['history']=db.all('SELECT epoch,train_loss,validation_ap,validation_logloss,duration_seconds,sample_count,peak_gpu_mib,skipped_updates FROM model_epoch WHERE model_run_id=%s ORDER BY epoch',(str(model_id),))
         result['metrics']=db.all('SELECT split,cohort,name,value,sample_count,positive_count,reason FROM model_metric WHERE model_run_id=%s ORDER BY split,cohort,name',(str(model_id),))
+        result['calibration']={}
+        for metric in result['metrics']:
+            if not metric['name'].startswith('calibration_'):continue
+            _,index,key=metric['name'].split('_',2)
+            cohort=result['calibration'].setdefault(metric['split'],{}).setdefault(metric['cohort'],{})
+            cohort.setdefault(index,dict(start=int(index)/10,end=(int(index)+1)/10))[key]=metric['value']
+        for split in result['calibration'].values():
+            for cohort,bins in list(split.items()):split[cohort]=[bins[str(i)] for i in range(10) if str(i) in bins]
         result['benchmarks']=db.all('SELECT device,`precision`,repeat_index,steps,elapsed_seconds,throughput,peak_allocated_mib,peak_reserved_mib,rss_mib FROM benchmark WHERE experiment_id=%s ORDER BY device,repeat_index',(release['experiment_id'],))
         return result
 
@@ -324,6 +334,8 @@ def create_app(config=None,pool=None,cursor_key=None):
         if p.cursor:
             created,run=signer.decode(p.cursor,context('tasks',p));condition+=' AND (created_at<%s OR (created_at=%s AND run_id>%s))';args+=[created,created,run]
         rows=db.all('SELECT run_id,stage,attempt,status,application_id,started_at,finished_at,error_code,created_at FROM task_run WHERE '+condition+' ORDER BY created_at DESC,run_id ASC LIMIT %s',(*args,p.limit+1))
+        evidence=json.loads(release['manifest_json']).get('task_evidence',{})
+        for row in rows:row['performance']=evidence.get(row['run_id'])
         return paged(request,p,'tasks',rows,lambda r:[r['created_at'].isoformat(sep=' '),r['run_id']])
 
     @app.get('/api/v1/reports/summary')

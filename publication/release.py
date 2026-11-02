@@ -9,7 +9,7 @@ import uuid
 import numpy as np
 from orchestration.common import ROOT,atomic_json,sha,fingerprint,encode,now,stamp,ManifestError,PipelineError
 from orchestration.pipeline import latest,files,validate
-from orchestration.storage import Hdfs
+from orchestration.storage import Hdfs,application
 
 TABLE_WIDTHS={'event_cube':5,'entity_daily':6,'user_daily':10,'range_summary':7,'activity_daily':5,'prediction':11}
 
@@ -135,11 +135,22 @@ def publish(lease):
         row=latest(lease.db,batch,name)
         if not row:raise ManifestError('Missing analysis stage')
         stages[name]=validate(storage,row['output_path'],{'run_id':row['run_id'],'batch_id':batch})
+    task_evidence={}
+    with lease.db.cursor() as q:
+        q.execute("SELECT run_id,stage,application_id,output_path FROM task_run WHERE batch_id=%s AND status='SUCCEEDED' ORDER BY created_at",(batch,));task_rows=q.fetchall()
+    for task in task_rows:
+        if not task['application_id']:continue
+        app=application(lease.config,task['application_id'])
+        if not app or app['state']!='FINISHED' or app['finalStatus']!='SUCCEEDED':raise ManifestError('Release contains an unconfirmed YARN application')
+        counters=storage.json(task['output_path']+'/manifest.json').get('counters',{}).get('org.apache.hadoop.mapreduce.TaskCounter',{})
+        task_evidence[task['run_id']]={k:counters.get(k) for k in ('CPU_MILLISECONDS','GC_TIME_MILLIS','MAP_INPUT_RECORDS','REDUCE_INPUT_RECORDS','REDUCE_SHUFFLE_BYTES','SPILLED_RECORDS','MAP_PHYSICAL_MEMORY_BYTES_MAX','REDUCE_PHYSICAL_MEMORY_BYTES_MAX')}
     manifest=dict(schema_version='release-v1',baseline_version='UBA-DOC-1.0.0',batch_id=batch,
                   experiment_id=models['experiment_id'],selected_model_id=models['selected_model_id'],
                   inputs={name:sha(work/(name+'.json')) for name in ('models','forecast','samples','pipeline')},
                   models_archive=models['archive'],forecast_archive=forecast['output_path'],
+                  task_evidence=task_evidence,
                   samples=samples['samples']['splits'],analysis=pipeline['analysis'],quality=pipeline['quality'],
+                  reliability={'independent_backup_verified':False,'storage':'single physical disk; local copies only'},
                   stages={k:{'run_id':v['run_id'],'outputs':v['outputs']} for k,v in stages.items()})
     manifest_hash=fingerprint(manifest)
     with lease.db.cursor() as q:
