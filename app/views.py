@@ -110,7 +110,7 @@ def experiments(api,release):
             table([{'实际情况':'没有购买','预测没有购买':int(values['tn']),'预测购买':int(values['fp'])},
                    {'实际情况':'有购买','预测没有购买':int(values['fn']),'预测购买':int(values['tp'])}])
     with st.container(key='panel_training'):
-        section('训练过程','CONSTANT 没有可训练参数，因此没有训练曲线。')
+        section('训练过程','CONSTANT 没有可训练参数，因此没有训练曲线。' if model['algorithm']=='CONSTANT' else '当前模型每一轮训练与验证的实测结果。')
         if model['history']:
             a,b=st.columns(2)
             with a:st.plotly_chart(charts.lines(model['history'],'epoch',[('train_loss','训练损失','#3159D6'),('validation_logloss','验证损失','#16838B')]),use_container_width=True)

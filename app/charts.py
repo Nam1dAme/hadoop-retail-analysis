@@ -49,4 +49,5 @@ def lines(rows,x,series,height=310):
     for key,label,color in series:
         fig.add_trace(go.Scatter(x=[r[x] for r in rows],y=[float(r[key]) if r.get(key) is not None else None for r in rows],
                                 name=label,mode='lines+markers',line=dict(color=color,width=2),connectgaps=False))
+    fig.update_layout(showlegend=True)
     return finish(fig,height)
