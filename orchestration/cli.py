@@ -32,9 +32,23 @@ def execute(args):
         try:uuid.UUID(args.batch_id)
         except ValueError:raise ConfigError('Invalid batch UUID') from None
     if args.dry_run:
-        if args.command=='ingest':source=examine(args.source or c['source']['path'])
-        else:source=None
-        return {'status':'DRY_RUN','command':args.command,'source':source,'baseline_version':BASELINE,'plan':list(STAGES) if args.command in ('pipeline','resume') else [args.command]}
+        from .storage import Hdfs,JAR
+        source=examine(args.source or c['source']['path']) if args.command=='ingest' else None
+        with connect(c,args.credentials) as db,db.cursor() as q:
+            if args.command!='migrate':require_current(db)
+            if hasattr(args,'batch_id'):
+                q.execute('SELECT batch_id FROM data_batch WHERE batch_id=%s',(args.batch_id,))
+                if not q.fetchone():raise ConfigError('Unknown batch')
+                required=('J05','J06','J04users') if args.command=='prepare-samples' else ('I00',) if args.command in ('pipeline','profile') else ()
+                for stage in required:
+                    q.execute("SELECT output_path FROM task_run WHERE batch_id=%s AND stage=%s AND status='SUCCEEDED' ORDER BY finished_at DESC LIMIT 1",(args.batch_id,stage))
+                    row=q.fetchone()
+                    if not row or not Hdfs(c).exists(row['output_path']+'/_SUCCESS'):raise ConfigError('Missing prerequisite: '+stage)
+            q.execute('SELECT IS_USED_LOCK(%s) AS owner',('behavior-heavy-task',));busy=q.fetchone()['owner'] is not None
+        if args.command not in ('migrate','status'):
+            if not JAR.is_file():raise DependencyError('Build business JAR first')
+            Hdfs(c).command('-stat','%F','/')
+        return {'status':'DRY_RUN','command':args.command,'source':source,'baseline_version':BASELINE,'resource_busy':busy,'dependencies_checked':True,'plan':list(STAGES) if args.command in ('pipeline','resume') else [args.command]}
     work=Path(c['paths']['work_dir']);work.mkdir(parents=True,exist_ok=True)
     if args.command=='migrate':
         backup=work/'backups'/('pre-migration-'+stamp().replace(':','')+'.sql');backup.parent.mkdir(parents=True,exist_ok=True)
