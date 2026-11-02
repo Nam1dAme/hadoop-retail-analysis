@@ -1,6 +1,6 @@
 # Hadoop 用户行为分析与预测
 
-当前已完成开发环境搭建，业务流水线、训练与七页工作台尚待实施。冻结设计见[文档入口](docs/README.md)。环境搭建记录见[执行报告](docs/execution/2026-11-02-environment.md)。
+当前已完成环境及M1—M3开发，完整100,150,807行已通过Hadoop处理，分析和训练样本已生成。模型训练、版本发布与工作台在后续阶段实施。冻结设计见[文档入口](docs/README.md)。环境搭建记录见[执行报告](docs/execution/2026-11-02-environment.md)，数据处理结果见[M1—M3验收报告](docs/execution/2026-11-02-m123-acceptance.md)。
 
 ## 开发环境
 
@@ -56,4 +56,23 @@ python scripts/database-service.py stop
 
 `uv.lock`锁定全部Python依赖，`config/toolchain.lock.json`锁定Java/Hadoop发行包及官方摘要，`config/environment.lock.json`记录本机实际版本和配置hash。机器相关安装与数据都在忽略的`var`目录，凭据、CSV、模型、缓存和`.venv`不提交Git。
 
-后续修改依赖用`uv lock`并重新验证；不要修改旧项目的虚拟环境或全局Java。HDFS为单机副本1，仅限本地研究。全量画像、业务数据库迁移、容量阶梯、完整训练与独立备份属于后续阶段，不能将本环境报告当作项目软件已验收。
+后续修改依赖用`uv lock`并重新验证；不要修改旧项目的虚拟环境或全局Java。HDFS为单机副本1，仅限本地研究。M1—M3已完成全量画像、阶段数据库迁移与样本准备；容量阶梯、正式训练和独立备份仍须在后续阶段验收。
+
+## M1—M3 数据链路
+
+```bash
+# 已生成的完整批次；status只读，不重新计算。
+scripts/behaviorctl --baseline UBA-DOC-1.0.0 status --batch-id 1c577aba-46f2-4710-b296-5f29ac842921
+# 新源的标准处理流程（同实现可复用成功产物；代码或参数变化产生新尝试）。
+scripts/build-jobs.sh
+scripts/behaviorctl --baseline UBA-DOC-1.0.0 --credentials var/secrets/migrator.cnf migrate
+scripts/behaviorctl --baseline UBA-DOC-1.0.0 ingest --source-url https://tianchi.aliyun.com/dataset/649
+scripts/behaviorctl --baseline UBA-DOC-1.0.0 pipeline --batch-id <UUID> --through J06
+scripts/behaviorctl --baseline UBA-DOC-1.0.0 prepare-samples --batch-id <UUID>
+```
+
+具体契约见[导入](ingest/README.md)、[Hadoop作业](jobs/README.md)、[分片](ml/README.md)、[迁移](migrations/README.md)。完整执行入口为`python scripts/run-m123.py`，独立验收为`python scripts/verify-m123.py`。运行日志、质量报告和结果索引在`var/production/`，不会提交原始数据和分片。
+
+当前样本索引为`var/production/samples.json`：TRAIN3463211、VALIDATION877575、TEST888982、FORECAST986594；总计6216362条、192个分片。未来窗口标签为-1，业务上表示尚无观测结果。M4可直接消费此已验证缓存及其manifest，无需为查看数据反复执行pipeline。
+
+质量或任务失败返回非零退出码；查看对应`var/production/runs/<run_id>/driver.log`。`resume --batch-id <UUID> --through J06`从可校验结果继续；应用终态或原进程存活情况不明确时拒绝重复提交。`--dry-run`须放在子命令之前，只读检查依赖并打印计划。

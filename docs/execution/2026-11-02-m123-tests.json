@@ -1,0 +1,74 @@
+{
+  "baseline_version": "UBA-DOC-1.0.0",
+  "status": "PASS",
+  "observed_at": "2026-11-02T05:46:57.854162+00:00",
+  "python_contract_tests": 10,
+  "java_contract_log_sha256": "de20cdfdf89a0895d5de9316e2ef53e4fdca2f0c9539af5075f1b064e74b36c4",
+  "integration_reports": {
+    "stable-verification": {
+      "status": "PASS",
+      "synthetic": true,
+      "batch_id": "97eb0c70-44cb-4a7a-bf9d-608bd9475b2f",
+      "tests": [
+        "CSV small splits and no final LF",
+        "1-vs-2 reducer semantic equivalence",
+        "exact UV and retention",
+        "full-window TopK and tie order",
+        "independent population audit",
+        "mmap shard row/key verification"
+      ]
+    },
+    "quality-failures-verification": {
+      "status": "PASS",
+      "synthetic": true,
+      "cases": [
+        {
+          "case": "empty",
+          "batch_id": "fddf5011-3e60-489d-9588-eb4b2d0d09fd",
+          "raw_rows": 0,
+          "application_id": "application_1793560484614_0024",
+          "expected_exit_code": 4
+        },
+        {
+          "case": "invalid",
+          "batch_id": "73e23818-1f14-4843-9217-117ac7e0d2a9",
+          "raw_rows": 4,
+          "application_id": "application_1793560484614_0025",
+          "expected_exit_code": 4
+        }
+      ]
+    },
+    "recovery-final-verification": {
+      "status": "PASS",
+      "synthetic": true,
+      "batch_id": "4f3e4de9-4479-476c-8741-e0ce828aef7d",
+      "run_id": "e9723ed3-77a9-494c-a01e-099c21d17ddd",
+      "tests": [
+        "rename-before-DB recovery",
+        "same-run idempotence",
+        "global lock conflict"
+      ]
+    },
+    "dry-run-verification": {
+      "status": "PASS",
+      "tests": [
+        "read-only prerequisite validation",
+        "missing batch rejected",
+        "no task/batch/lease writes"
+      ]
+    },
+    "yarn-retry-verification": {
+      "status": "PASS",
+      "synthetic": true,
+      "batch_id": "05dcbb00-56ed-4653-bdc5-1a955c5e7113",
+      "failed_application": "application_1793560484614_0028",
+      "retry_application": "application_1793560484614_0029",
+      "tests": [
+        "real YARN failure",
+        "terminal verification",
+        "attempt-2 parent chain",
+        "successful predecessor reused"
+      ]
+    }
+  }
+}
