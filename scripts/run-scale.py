@@ -9,10 +9,12 @@ import time
 import statistics
 import urllib.request
 import urllib.error
+import shutil
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 from orchestration.common import ROOT,load,atomic_json,stamp
 from orchestration.sampling import record_samples
 from orchestration.control import Lease
+from orchestration.resources import host_free_bytes
 
 parser=argparse.ArgumentParser();parser.add_argument('--tiers',nargs='+',choices=['1000000','10000000','full'],default=['1000000','10000000','full']);args=parser.parse_args()
 if subprocess.check_output(['git','status','--porcelain'],cwd=ROOT).strip():raise SystemExit('Commit changes before scale execution')
@@ -79,15 +81,33 @@ work_dir = "{root}"
         if result.returncode:raise SystemExit(f'{tier} {name} failed; inspect {root}')
         value=json.loads((root/(name+'.json')).read_text());assert value['status']=='SUCCEEDED'
         return value
-    started=time.monotonic();begin=stamp()
+    started=time.monotonic();begin=stamp();linux_before=shutil.disk_usage(ROOT).free;host_before=host_free_bytes()
+    required=120*1024**3
+    method='original conservative full-run reserve'
+    if tier=='full' and (linux_before<required or host_before is None or host_before<required):
+        previous=next((r for r in results if r['tier']=='10000000'),None)
+        if not previous or previous.get('peak_increment_bytes') is None:raise SystemExit('Full-run admission requires 120 GiB or observed 10M peak evidence')
+        required=int(previous['peak_increment_bytes']*(original['rows']/10_000_000)*1.5+20*1024**3)
+        method='observed 10M incremental peak scaled by rows, multiplied by 1.5, plus 20 GiB'
+        if linux_before<required or host_before is None or host_before<required:raise SystemExit('Full-run estimated disk peak does not fit both Linux and host volume')
+    admission=dict(linux_free=linux_before,host_free=host_before,required_free=required if tier=='full' else 20*1024**3,method=method if tier=='full' else 'heavy-task minimum reserve')
     run('migrate',['migrate'],'migrator')
     batch=run('ingest',['ingest','--source-url','https://tianchi.aliyun.com/dataset/649'])['batch_id']
     outcome=run('pipeline',['pipeline','--batch-id',batch,'--through','J04summary','--reducers','2'])
     status=run('status',['status','--batch-id',batch])
     actual=outcome['quality']['rows']['raw_rows'];expected=original['rows'] if tier=='full' else int(tier)
     assert actual==expected
+    end=stamp();telemetry=ROOT/'var/production/resource-telemetry.jsonl'
+    observations=[]
+    if telemetry.exists():
+        for line in telemetry.read_text().splitlines():
+            point=json.loads(line)
+            if begin<=point['observed_at'].replace('+00:00','Z')<=end:observations.append(point)
+    peak_increment=max(0,linux_before-min(x['linux_free'] for x in observations)) if observations else None
     report=dict(tier=tier,status='PASS',sampled=tier!='full',synthetic=False,batch_id=batch,rows=actual,
                 started_at=begin,finished_at=stamp(),seconds=time.monotonic()-started,
+                disk_admission=admission,peak_increment_bytes=peak_increment,resource_observations=len(observations),
+                min_memory_available=min((x['mem_available'] for x in observations),default=None),
                 scope='M1-M2 analysis throughput; record samples are not prediction evidence',
                 quality=outcome['quality'],tasks=status['tasks'],task_history=history(status['tasks']))
     atomic_json(root/'verification.json',report);results.append(report)
