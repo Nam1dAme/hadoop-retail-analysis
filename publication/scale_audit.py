@@ -2,6 +2,7 @@
 from datetime import datetime
 import hashlib
 import json
+import urllib.request
 from pathlib import Path
 from orchestration.common import ROOT,load,sha,fingerprint,atomic_json,stamp,commit,ManifestError
 from orchestration.webhdfs import WebHdfs
@@ -36,6 +37,10 @@ def audit_tier(tier,guard=lambda:None):
         counters=manifest.get('counters',{}).get('org.apache.hadoop.mapreduce.TaskCounter',{})
         if 'REDUCE_SHUFFLE_BYTES' not in counters:raise ManifestError('Shuffle evidence missing')
         metrics={key:counters.get(key) for key in COUNTERS};history=histories[task['application_id']]
+        job_id=task['application_id'].replace('application_','job_',1)
+        with urllib.request.urlopen('http://127.0.0.1:19888/ws/v1/history/mapreduce/jobs/'+job_id,timeout=10) as response:job_info=json.load(response)['job']
+        attempts={key:job_info[key] for key in ('failedMapAttempts','failedReduceAttempts','killedMapAttempts','killedReduceAttempts')}
+        if job_info['state']!='SUCCEEDED' or attempts['failedMapAttempts'] or attempts['failedReduceAttempts']:raise ManifestError('Failed attempts require inspection before claiming OOM-free scale execution')
         inputs=[r['input_records'] for r in history['reducers']]
         if not inputs or any(x is None or x<0 for x in inputs):raise ManifestError('Reducer input evidence missing')
         if sum(inputs)!=counters['REDUCE_INPUT_RECORDS']:raise ManifestError('Reducer inputs do not match job counter')
@@ -43,7 +48,7 @@ def audit_tier(tier,guard=lambda:None):
         skew=dict(inputs=inputs,max_fraction=largest/total if total else None,max_to_min=largest/least if least else None,
                   ratio_reason='zero denominator' if not least else None,task_durations=history['task_durations'])
         jobs.append(dict(stage=task['stage'],run_id=task['run_id'],application_id=task['application_id'],manifest_sha256=hashlib.sha256(raw).hexdigest(),
-                         counters=metrics,unreported_counters=[key for key,value in metrics.items() if value is None],skew=skew))
+                         counters=metrics,attempts=attempts,unreported_counters=[key for key,value in metrics.items() if value is None],skew=skew))
     if {job['stage'] for job in jobs}!=STAGES or len(jobs)!=6:raise ManifestError('Six physical analysis jobs are required per tier')
     result=dict(status='PASS',tier=tier,rows=expected,execution_report_sha256=sha(path),fresh_jobs=True,jobs=jobs,
                 seconds=report['seconds'],resource_observations=report['resource_observations'],min_memory_available=report['min_memory_available'],
@@ -58,6 +63,12 @@ def audit_scale(guard=lambda:None):
         execution=json.loads(index.read_text())
         if execution['status']!='PASS' or {r['tier'] for r in execution['tiers']}!={'1000000','10000000','full'}:raise ManifestError('Complete three-tier execution is required')
         for tier in ('1000000','10000000','full'):report['tiers'].append(audit_tier(tier,guard))
+        baseline=ROOT/'var/production/cgroup-memory-observation.json'
+        observed=json.loads(baseline.read_text());scope=Path('/proc/self/cgroup').read_text().strip().split('::',1)[1]
+        if scope!=observed['scope']:raise ManifestError('Cgroup coverage changed; memory-event evidence needs review')
+        events={key:int(value) for key,value in (line.split() for line in (Path('/sys/fs/cgroup')/scope.lstrip('/')/'memory.events').read_text().splitlines())}
+        report['memory_events']=dict(scope=scope,counters=events,baseline_sha256=sha(baseline),coverage='Cumulative shared session cgroup, verified to include project Hadoop daemons; not an individual process RSS peak')
+        if events['oom'] or events['oom_kill']:raise ManifestError('Session recorded OOM events; inspect ownership before claiming project OOM-free')
         report.update(status='PASS',execution_report_sha256=sha(index),verified_at=stamp(),scope='Archived job metadata, Shuffle/spill/CPU/GC, reducer skew, fresh-run timing and sampled resource coverage')
         atomic_json(output,report);return report
     except BaseException as error:
