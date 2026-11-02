@@ -13,6 +13,7 @@
 - PyArrow26与固定NumPy1.26不兼容，首次真实表格渲染失败；已单独锁定PyArrow19.0.1，七页测试重新通过。初始环境/uv锁与恢复后实际包版本说明保存在模型实验目录，没有把UI依赖调整伪装成原始锁未变化。
 - 私有HistoryServer已在19888真实就绪；修复Hadoop3.4.2的“stopped仍返回0”状态误判，启动依据状态文本及HTTP门禁。
 - 控制writer、结果loader、API reader分离；真实非变更数据权限探针通过，DDL及FILE权限被拒绝。`var/production/permission-verification.json`为PASS。
+- 当前PyArrow19.0.1及权限收紧后的CUDA/数据库探针重新通过，后续环境锁已更新；旧锁保留在`var/runtime-environments/pre-m7/`，正式模型归档仍保留其历史锁和依赖调整说明。
 - WebHDFS真实小文件上传/下载/摘要探针通过。DataNode公布主机名而仅绑定回环，客户端已限定重定向到本机19864。完整备份/恢复仍待运行。
 
 ## 正式入口和证据

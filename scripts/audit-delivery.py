@@ -11,6 +11,7 @@ from orchestration.common import ROOT,atomic_json,sha,stamp,commit
 
 # A report's PASS is scoped to its own test, never a substitute for another gate.
 reports={
+ 'G-ENV':('var/environment-probe.json',),
  'G-DATA-MR':('var/production/m123-verification.json',),
  'G-MODEL-GPU':('var/production/model-verification.json','var/production/cuda-recovery-test.json'),
  'G-RELEASE':('var/production/release-verification.json',),
