@@ -21,13 +21,13 @@ PAGES={
 def changed():st.query_params['page']=st.session_state['page']
 
 def main():
-    st.set_page_config(page_title='行为观察 · Behavior Analytics',page_icon='◫',layout='wide',initial_sidebar_state='auto')
+    st.set_page_config(page_title='零售观察：Hadoop 电商用户行为分析与预测系统',page_icon='◫',layout='wide',initial_sidebar_state='auto')
     install_style()
     requested=st.query_params.get('page','overview');requested=requested if requested in PAGES else 'overview'
     if st.session_state.get('page')!=requested:st.session_state['page']=requested
     api=BehaviorAPI(os.environ.get('BEHAVIOR_API_URL','http://127.0.0.1:8010/api/v1'))
     with st.sidebar:
-        st.html('<div class="brand"><div class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></div><div><strong>行为观察</strong><p>Behavior Analytics</p></div></div>')
+        st.html('<div class="brand"><div class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></div><div><strong>零售观察</strong><p>Behavior Analytics</p></div></div>')
         with st.container(key='navigation'):
             st.radio('页面',list(PAGES),format_func=lambda v:PAGES[v][0],key='page',on_change=changed,label_visibility='collapsed')
         st.html('<div class="sidebar-source"><strong>从行为到判断</strong><p>历史用户行为的全量分析<br>与购买行为预测工作台</p><p>2017 年历史日志<br>单机伪分布式 · HDFS 副本 1</p></div>')

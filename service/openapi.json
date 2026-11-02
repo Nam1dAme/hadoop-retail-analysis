@@ -1,7 +1,7 @@
 {
   "openapi": "3.1.0",
   "info": {
-    "title": "行为观察只读 API",
+    "title": "零售观察：Hadoop 电商用户行为分析与预测系统 · 只读 API",
     "version": "1.0.0"
   },
   "paths": {

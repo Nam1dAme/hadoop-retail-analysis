@@ -116,7 +116,7 @@ def create_app(config=None,pool=None,cursor_key=None):
     if cursor_key is None:
         cursor_key=(ROOT/'var/secrets/cursor.key').read_bytes()
     signer=Cursors(cursor_key);cache=Cache()
-    app=FastAPI(title='行为观察只读 API',version='1.0.0',openapi_url='/api/v1/openapi.json',docs_url='/api/v1/docs')
+    app=FastAPI(title='零售观察：Hadoop 电商用户行为分析与预测系统 · 只读 API',version='1.0.0',openapi_url='/api/v1/openapi.json',docs_url='/api/v1/docs')
 
     @app.middleware('http')
     async def envelope(request:Request,call_next):

@@ -2,6 +2,8 @@
 
 2026-11-02；FROZEN。18份基线文件及本清单，共19份Markdown。按UTF-8文件原字节计算SHA-256；本清单不自哈希。执行报告不属于本次冻结集合。任何语义变更遵守[00](00-governance.md)，先审查再更新哈希。
 
+2026-11-03，CR-20261103-PROJECT-NAME：按用户指令将项目展示名称统一为“零售观察：Hadoop 电商用户行为分析与预测系统”。本次修改仓库与基线 README 的标题，并同步网页与 API 文档的展示标题。基线 README 的 SHA-256 随标题更新，其余17份基线文件保持原字节。此次名称修订不影响需求、业务语义、数据或接口契约，运行产物的业务基线标识仍为 UBA-DOC-1.0.0，无数据迁移。校验相对链接、名称一致性、18份文件哈希及 OpenAPI 一致性；如需回滚，可撤销此次提交并恢复原标题及对应哈希。
+
 | 文件 | SHA-256 |
 |---|---|
 | [00-governance.md](00-governance.md) | `1e4dafa7fbbf1d6786a43ae51db64e6ef65fe03cdf7120d3833f5361267e9b9a` |
@@ -21,4 +23,4 @@
 | [14-traceability.md](14-traceability.md) | `0e4ef0a3b29837020467bff3b7c6fb8d5b0577fa3ea5893a5b7f9e56e2a25589` |
 | [15-evidence.md](15-evidence.md) | `329e4d6869b8f30823060b2f43cff95d40379abf25c9cd33e7330f8f0baddd74` |
 | [16-freeze-review.md](16-freeze-review.md) | `0823da9397a1f2216196202573d57467360926a5404b72e7d50b7202db8efbf5` |
-| [README.md](README.md) | `008167c75566e18138443af28f77f2474c0cfc25e0e7a70c4a080af431872b0d` |
+| [README.md](README.md) | `aa62f0f9f6cd5635a7e19a94237c4514abfabb1b07517c52ba45de012d702456` |
