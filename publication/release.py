@@ -10,6 +10,7 @@ import numpy as np
 from orchestration.common import ROOT,atomic_json,sha,fingerprint,encode,now,stamp,ManifestError,PipelineError
 from orchestration.pipeline import latest,files,validate
 from orchestration.storage import Hdfs,application
+from .validation import prepare_offline_checks
 
 TABLE_WIDTHS={'event_cube':5,'entity_daily':6,'user_daily':10,'range_summary':7,'activity_daily':5,'prediction':11}
 
@@ -109,6 +110,7 @@ def publish_pointer(db,release_id,expected_generation,operator='behavior-cli',ac
 
 
 def publish(lease):
+    prepare_offline_checks(lease.db)
     work=ROOT/'var/production'
     models=json.loads((work/'models.json').read_text());forecast=json.loads((work/'forecast.json').read_text())
     samples=json.loads((work/'samples.json').read_text());pipeline=json.loads((work/'pipeline.json').read_text())

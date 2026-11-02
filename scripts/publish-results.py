@@ -20,9 +20,6 @@ with Lease(load(ROOT/'config/development.toml'),ROOT/'var/secrets/writer.cnf') a
  else:
   if args.action=='publish':materialize_calibration(lease)
   with connect(lease.config,ROOT/'var/secrets/loader.cnf') as result_db:
-   # Full-table offline integrity checks have a separate bounded budget from read APIs.
-   result_db._read_timeout=300
-   with result_db.cursor() as q:q.execute('SET SESSION max_statement_time=240')
    result_lease=SimpleNamespace(config=lease.config,db=result_db,guard=lease.guard)
    if args.action=='publish':result=publish(result_lease)
    else:

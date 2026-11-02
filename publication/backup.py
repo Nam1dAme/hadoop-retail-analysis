@@ -14,6 +14,7 @@ from orchestration.common import ROOT,atomic_json,sha,encode,stamp,ManifestError
 from orchestration.database import backup as sql_backup
 from orchestration.storage import Hdfs
 from orchestration.webhdfs import WebHdfs
+from .validation import prepare_offline_checks
 
 
 class DigestReader:
@@ -24,6 +25,7 @@ class DigestReader:
 
 
 def make_backup(lease):
+    prepare_offline_checks(lease.db)
     release=json.loads((ROOT/'var/production/release.json').read_text())
     with lease.db.cursor() as q:
         q.execute("SELECT * FROM data_release WHERE release_id=%s AND status='READY'",(release['release_id'],));row=q.fetchone()
