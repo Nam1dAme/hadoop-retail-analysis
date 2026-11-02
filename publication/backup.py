@@ -67,8 +67,12 @@ def make_backup(lease):
     with os.fdopen(os.open(archive,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600),'wb') as output,gzip.GzipFile(fileobj=output,mode='wb',compresslevel=1,mtime=0) as compressed,tarfile.open(fileobj=compressed,mode='w|',copybufsize=1024**2) as tar:
         tar.add(dump,arcname='database.sql',recursive=False)
         local_files=[ROOT/'README.md',ROOT/'uv.lock',*sorted((ROOT/'config').rglob('*')),*sorted((ROOT/'var/history-rewrite').rglob('commit-map.json')),*sorted((ROOT/'var/history-rewrite').rglob('*.bundle'))]
-        local_files += [ROOT/'var/production'/name for name in ('m123-verification.json','models.json','forecast.json','release.json','cuda-recovery-test.json')]
+        local_files += [ROOT/'var/production'/name for name in ('m123-verification.json','models.json','model-verification.json','forecast.json','release.json','release-verification.json','cuda-recovery-test.json','api-verification.json','entity-ranking-verification.json','api-load-test.json','permission-verification.json')]
         if (ROOT/'var/scale/verification.json').exists():local_files.append(ROOT/'var/scale/verification.json')
+        for folder in ('browser','browser-selected-model'):
+            local_files.extend(sorted((ROOT/'var/production'/folder).glob('*.json')))
+            local_files.extend(sorted((ROOT/'var/production'/folder).glob('*.png')))
+        if (ROOT/'var/fixtures/hotspot-verification.json').exists():local_files.append(ROOT/'var/fixtures/hotspot-verification.json')
         bundle=directory/'source.bundle';subprocess.run(['git','bundle','create',str(bundle),'--all'],cwd=ROOT,check=True);local_files.append(bundle)
         for local in local_files:
             if local.is_file():tar.add(local,arcname='project/'+str(local.relative_to(ROOT)),recursive=False)

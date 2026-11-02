@@ -15,7 +15,7 @@ reports={
  'G-DATA-MR':('var/production/m123-verification.json',),
  'G-MODEL-GPU':('var/production/model-verification.json','var/production/cuda-recovery-test.json'),
  'G-RELEASE':('var/production/release-verification.json',),
- 'G-APP':('var/production/browser/verification.json','var/production/api-load-test.json','var/production/permission-verification.json'),
+ 'G-APP':('var/production/browser/verification.json','var/production/browser-selected-model/verification.json','var/production/api-verification.json','var/production/entity-ranking-verification.json','var/production/api-load-test.json','var/production/permission-verification.json'),
  'G-SCALE':('var/scale/verification.json','var/fixtures/hotspot-verification.json'),
  'G-LOCAL-RECOVERY':('var/production/backup.json','var/production/recovery.json'),
 }

@@ -12,7 +12,7 @@ sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 from orchestration.common import ROOT,atomic_json,stamp,commit,sha,fingerprint
 
 started=time.monotonic();producer=commit();release=json.loads((ROOT/'var/production/release.json').read_text());rid=release['release_id']
-pipeline=json.loads((ROOT/'var/production/pipeline.json').read_text());records=[]
+pipeline=json.loads((ROOT/'var/production/pipeline.json').read_text());source=json.loads((ROOT/'var/production/ingest.json').read_text())['source'];records=[]
 def get(route,params=None,scoped=True):
     params=dict(params or {})
     if scoped:params['release_id']=rid
@@ -47,7 +47,7 @@ for model in experiments['models']:
     assert get('/models/'+model['model_run_id'])['data']['model_run_id']==model['model_run_id']
     for row in get('/predictions',{'mode':'TEST','model_run_id':model['model_run_id'],'limit':2})['data']:
         assert row['observed_label'] in (0,1) and row['label_status']=='OBSERVED'
-quality=get('/quality')['data'];assert int(quality['raw_rows'])==100150807 and int(quality['in_scope_rows'])==pipeline['analysis']['scoped_rows']
+quality=get('/quality')['data'];assert int(quality['raw_rows'])==source['rows'] and int(quality['in_scope_rows'])==pipeline['analysis']['scoped_rows']
 tasks=get('/tasks',{'limit':100})['data'];expected={r['application_id'] for r in pipeline['stages'].values() if r['application_id']}
 assert {r['application_id'] for r in tasks if r['application_id']}==expected and len(expected)==8
 summary=get('/reports/summary')['data'];assert summary['overview']==overview and summary['release']['release_id']==rid

@@ -22,6 +22,8 @@ from service.database import Pool
 
 def restore(lease,backup_manifest=None):
     report=json.loads(Path(backup_manifest or ROOT/'var/production/backup.json').read_text())
+    with lease.db.cursor() as q:
+        q.execute('SELECT release_id,generation FROM current_release WHERE singleton_id=1');original_current=q.fetchone()
     archive=Path(report['archive']).resolve(strict=True)
     if not archive.is_relative_to(ROOT/'var/backups') or sha(archive)!=report['sha256']:
         raise ManifestError('Untrusted or changed backup archive')
@@ -99,10 +101,13 @@ def restore(lease,backup_manifest=None):
                 comparisons.append(route)
         duration=time.monotonic()-started
         if duration>4*3600:raise ManifestError('Local restore exceeded four-hour RTO target')
+        with lease.db.cursor() as q:
+            q.execute('SELECT release_id,generation FROM current_release WHERE singleton_id=1')
+            if q.fetchone()!=original_current:raise ManifestError('Production current changed during recovery')
         result=dict(status='PASS',scope='local-copy restore only',independent_backup_verified=False,
                     release_id=report['release_id'],archive_sha256=report['sha256'],database_port=3308,
                     restored_hdfs_root=remote,verified_hdfs_files=len(seen),verified_hdfs_bytes=hdfs_bytes,
-                    table_counts=actual,api_comparisons=comparisons,rto_seconds=duration,verified_at=stamp())
+                    table_counts=actual,api_comparisons=comparisons,production_current_unchanged=original_current,rto_seconds=duration,verified_at=stamp())
         atomic_json(ROOT/'var/production/recovery.json',result)
         return result
     finally:
