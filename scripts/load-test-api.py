@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 import sys
 import threading
+import subprocess
 import time
 import urllib.request
 import urllib.parse
@@ -27,6 +28,10 @@ def main():
                ('/predictions',{'mode':'FORECAST','limit':20}),('/tasks',{'limit':20})]
     cold=[]
     with Lease(load(ROOT/'config/development.toml'),ROOT/'var/secrets/writer.cnf') as lease:
+        # Cold timings refer to a fresh API process cache, not earlier browser-warmed data.
+        with (ROOT/'var/production/load-test-restart.log').open('w') as log:
+            for action in ('stop','start'):
+                subprocess.run([str(ROOT/'.venv/bin/python'),'scripts/web-service.py',action],cwd=ROOT,stdout=log,stderr=log,check=True)
         for route,params in list(scenarios):
             params['release_id']=release
             elapsed,value=read(route,params);cold.append(dict(route=route,seconds=elapsed))
