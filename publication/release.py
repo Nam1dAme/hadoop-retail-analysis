@@ -197,18 +197,20 @@ def publish(lease):
     counts['FORECAST']=load_rows(lease,release_id,'FORECAST','prediction',info['scores']['sha256'],
                                 prediction_rows(release_id,'FORECAST',info['model_run_id'],path,cache/'FORECAST',info['threshold'],lease))
     if counts['FORECAST']!=samples['samples']['splits']['FORECAST']['rows']:raise ManifestError('Forecast population differs')
-    with lease.db.cursor() as q:
-        for table in ('event_cube','entity_daily','user_daily','range_summary','activity_daily'):
-            q.execute('SELECT COUNT(*) AS n FROM '+table+' WHERE release_id=%s',(release_id,))
-            if q.fetchone()['n']!=counts[table]:raise ManifestError('Persisted row count differs')
-        q.execute('SELECT SUM(event_count) AS n FROM event_cube WHERE release_id=%s',(release_id,))
-        if int(q.fetchone()['n'])!=pipeline['analysis']['scoped_rows']:raise ManifestError('Loaded cube conservation failed')
-        q.execute('SELECT SUM(event_count) AS n FROM entity_daily WHERE release_id=%s',(release_id,))
-        if int(q.fetchone()['n'])!=2*pipeline['analysis']['scoped_rows']:raise ManifestError('Loaded entity conservation failed')
-        q.execute('SELECT COUNT(*) AS n FROM prediction WHERE release_id=%s',(release_id,))
-        if q.fetchone()['n']!=sum(counts[k] for k in counts if k.startswith('TEST-') or k=='FORECAST'):raise ManifestError('Loaded prediction count differs')
-        q.execute("SELECT COUNT(*) AS n FROM prediction WHERE release_id=%s AND mode='FORECAST' AND label IS NOT NULL",(release_id,))
-        if q.fetchone()['n']!=0:raise ManifestError('Unobserved labels became known')
+    validation_timings=[]
+    def check(name,sql,expected):
+        lease.guard();tick=time.monotonic()
+        with lease.db.cursor() as q:
+            q.execute(sql,(release_id,));value=q.fetchone()['n']
+        if value is None or int(value)!=expected:raise ManifestError('Persisted integrity check differs: '+name)
+        timing=dict(check=name,rows_or_events=int(value),seconds=time.monotonic()-tick)
+        validation_timings.append(timing);print(encode(timing),flush=True)
+    for table in ('event_cube','entity_daily','user_daily','range_summary','activity_daily'):
+        check(table+' rows','SELECT COUNT(*) AS n FROM '+table+' WHERE release_id=%s',counts[table])
+    check('cube events','SELECT SUM(event_count) AS n FROM event_cube WHERE release_id=%s',pipeline['analysis']['scoped_rows'])
+    check('entity events','SELECT SUM(event_count) AS n FROM entity_daily WHERE release_id=%s',2*pipeline['analysis']['scoped_rows'])
+    check('prediction rows','SELECT COUNT(*) AS n FROM prediction WHERE release_id=%s',sum(counts[k] for k in counts if k.startswith('TEST-') or k=='FORECAST'))
+    check('observed forecast labels',"SELECT COUNT(*) AS n FROM prediction WHERE release_id=%s AND mode='FORECAST' AND label IS NOT NULL",0)
     manifest_file=work/'release-manifest.json';atomic_json(manifest_file,manifest)
     storage.mkdir(str(Path(remote).parent))
     if not storage.exists(remote):storage.put(manifest_file,remote)
@@ -216,6 +218,6 @@ def publish(lease):
     with lease.db.cursor() as q:q.execute('UPDATE data_release SET loaded_at=%s WHERE release_id=%s',(now(),release_id))
     lease.guard();publish_pointer(lease.db,release_id,generation)
     result=dict(status='SUCCEEDED',release_id=release_id,manifest_hash=manifest_hash,manifest_path=remote,
-                counts=counts,seconds=time.monotonic()-started,published_at=stamp())
+                counts=counts,validation_timings=validation_timings,seconds=time.monotonic()-started,published_at=stamp())
     atomic_json(work/'release.json',result)
     return result
