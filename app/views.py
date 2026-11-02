@@ -87,13 +87,14 @@ def experiments(api,release):
         section('三种算法的实测对照','仅验证集决定算法、参数与阈值；测试集用于最终检查。')
         rows=[]
         for model in models:
-            row=dict(算法=model['algorithm'],设备=model['device'],参数量=model['parameter_count'],最佳轮次=model['best_epoch'],阈值=model['threshold'],已选定=model['model_run_id']==data['selected_model_id'])
+            row=dict(算法=model['algorithm'],设备=model['device'],参数量=model['parameter_count'],最佳轮次=model['best_epoch'] if model['best_epoch'] is not None else '无',阈值=model['threshold'],已选定=model['model_run_id']==data['selected_model_id'])
             for metric in model['metrics']:
                 if metric['cohort']=='ALL' and metric['name'] in ('ap','roc_auc','logloss','f1'):row[metric['split']+' '+metric['name']]=metric['value']
             rows.append(row)
         table(rows)
         st.caption(data['selection_reason'])
-    model=st.selectbox('查看实验详情',models,format_func=lambda r:r['algorithm'])
+    selected_index=next((i for i,row in enumerate(models) if row['model_run_id']==data['selected_model_id']),0)
+    model=st.selectbox('查看实验详情',models,index=selected_index,format_func=lambda r:r['algorithm'])
     with st.container(key='panel_calibration'):
         section('预测分数与实际购买比例','每个概率桶同时报告样本数；空桶不当作零购买率。测试结果只用于检查，不改变已固定阈值。')
         split=st.selectbox('评价集合',['VALIDATION','TEST'],format_func=lambda v:'验证集' if v=='VALIDATION' else '测试集')
