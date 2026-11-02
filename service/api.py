@@ -240,7 +240,7 @@ def create_app(config=None,pool=None,cursor_key=None):
     @app.get('/api/v1/entities/{entity_id}/trend')
     def entity_trend(request:Request,entity_id:Annotated[str,Field(pattern=r'^\d{1,20}$')],p:Annotated[EntityTrendParams,Query()]):
         ready(p.release_id)
-        rows=db.all('SELECT date,behavior_type,event_count FROM entity_daily WHERE release_id=%s AND entity_type=%s AND entity_id=%s AND date>=%s AND date<%s ORDER BY date',(str(p.release_id),p.entity_type,entity_id,p.start,p.end))
+        rows=db.all('SELECT date,behavior_type,event_count FROM entity_daily FORCE INDEX (entity_lookup) WHERE release_id=%s AND entity_type=%s AND entity_id=%s AND date>=%s AND date<%s ORDER BY date',(str(p.release_id),p.entity_type,entity_id,p.start,p.end))
         grouped={}
         for row in rows:
             value=grouped.setdefault(str(row['date']),dict(date=str(row['date']),pv_count=0,buy_count=0,cart_count=0,fav_count=0))

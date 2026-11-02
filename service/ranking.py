@@ -37,10 +37,9 @@ def rank_entities(db,release,start,end,kind,behavior,limit,position=None,*,chunk
         totals.update((entity,0) for entity in ids)
         for offset in range(0,len(ids),128):
             subset=ids[offset:offset+128];marks=','.join(['%s']*len(subset))
-            for day in days:
-                rows=read('SELECT entity_id,event_count FROM entity_daily FORCE INDEX (PRIMARY) WHERE release_id=%s AND date=%s AND entity_type=%s AND entity_id IN ('+marks+') AND behavior_type=%s',
-                          (release,day,kind,*subset,behavior))
-                for row in rows:totals[row['entity_id']]+=int(row['event_count'])
+            rows=read('SELECT entity_id,SUM(event_count) AS event_count FROM entity_daily FORCE INDEX (entity_lookup) WHERE release_id=%s AND entity_type=%s AND entity_id IN ('+marks+') AND behavior_type=%s AND date>=%s AND date<%s GROUP BY entity_id',
+                      (release,kind,*subset,behavior,start,end))
+            for row in rows:totals[row['entity_id']]=int(row['event_count'])
         ordered=eligible();upper=sum(stream['upper'] or 0 for stream in streams.values())
         exhausted=all(stream['done'] for stream in streams.values())
         # Strict > also proves correctness for count ties and ID ordering.
