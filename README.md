@@ -2,6 +2,8 @@
 
 当前已完成环境及M1—M3开发，完整100,150,807行已通过Hadoop处理，分析和训练样本已生成。模型训练、版本发布与工作台在后续阶段实施。冻结设计见[文档入口](docs/README.md)。环境搭建记录见[执行报告](docs/execution/2026-11-02-environment.md)，数据处理结果见[M1—M3验收报告](docs/execution/2026-11-02-m123-acceptance.md)。
 
+后续实现已加入：三模型训练与恢复、未来评分、原子发布、只读API和七页工作台。正式训练正在执行，完整发布与M7规模/恢复验收尚未完成；不要把代码与隔离测试通过视为正式版本已经发布。当前进度见[后续执行记录](docs/execution/2026-11-02-m4-m7-development.md)。
+
 当前源数据位于本项目`var/data/UserBehavior.csv`，是WSL本地文件，不是指向Windows挂载盘的符号链接。导入与环境锁脚本通过`config/development.toml`读取该路径。迁移前后的内容SHA256相同；历史基线、数据库来源记录与已发布产物清单中的旧路径记录当时的实际来源，不代表当前访问入口。数据文件位于Git忽略目录，不提交CSV。后续提交信息采用Conventional Commits：`type(scope): 中文描述`；type与scope保持英文，冒号后的描述使用中文，技术标识保留原样。
 
 ## 开发环境
@@ -45,7 +47,7 @@ scripts/check-hadoop.sh
 - YARN页面：<http://127.0.0.1:18088>；客户端地址：`127.0.0.1:18032`。
 - 数据库：`127.0.0.1:3307/behavior_analytics`。reader/writer/migrator凭据仅在`var/secrets/*.cnf`（权限0600）。管理入口为当前WSL用户的本项目Unix socket认证。
 - 示例：`mariadb --defaults-extra-file="$PWD/var/secrets/reader.cnf" -e 'SELECT 1'`。
-- API/UI预留8010/8510，尚未实现，没有服务监听。
+- API/UI使用8010/8510，均绑定localhost。未发布时返回明确空态，不展示随机数据。loader凭据同样保存在`var/secrets/loader.cnf`，与控制writer及API reader分离。
 
 ```bash
 scripts/hadoop-service.sh stop
@@ -78,3 +80,23 @@ scripts/behaviorctl --baseline UBA-DOC-1.0.0 prepare-samples --batch-id <UUID>
 当前样本索引为`var/production/samples.json`：TRAIN3463211、VALIDATION877575、TEST888982、FORECAST986594；总计6216362条、192个分片。未来窗口标签为-1，业务上表示尚无观测结果。M4可直接消费此已验证缓存及其manifest，无需为查看数据反复执行pipeline。
 
 质量或任务失败返回非零退出码；查看对应`var/production/runs/<run_id>/driver.log`。`resume --batch-id <UUID> --through J06`从可校验结果继续；应用终态或原进程存活情况不明确时拒绝重复提交。`--dry-run`须放在子命令之前，只读检查依赖并打印计划。
+
+## 后续阶段入口
+
+```bash
+source scripts/dev-env.sh
+# 全量正式实验及同一检查点恢复；有重任务在运行时拒绝重复启动。
+python scripts/train-models.py
+# 模型实验成功后依次执行，不能省略验证和测试封存。
+python scripts/setup-loader.py
+python scripts/publish-results.py forecast
+python scripts/publish-results.py publish
+# 查询服务和页面；默认分别为 http://127.0.0.1:8010 与 :8510。
+python scripts/web-service.py start
+python scripts/web-service.py status
+python scripts/web-service.py stop
+```
+
+工作台沿用旧项目实际Streamlit应用的蓝白配色与本地字体。页面不直接加载模型或读取HDFS；所有查询固定到一个完整发布版本。角色分离检查为`python tests/verify_permissions.py`。
+
+M7工具包括`setup-scale.py`/`run-scale.py`、`load-test-api.py`、`backup-release.py`/`restore-backup.py`。规模测试使用独立库和HDFS根；记录抽样仅用于处理性能。备份与恢复均在本项目目录和隔离实例内进行。用户已确认没有另一块硬盘，因此本地副本及恢复演练不能满足独立介质备份门禁。
