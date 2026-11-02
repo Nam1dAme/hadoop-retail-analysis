@@ -21,8 +21,11 @@ with sync_playwright() as p:
             page.get_by_text('数据版本已固定',exact=False).wait_for(timeout=30000)
             # Wait for all initial API reads/charts and Streamlit's script runner to settle.
             page.wait_for_timeout(2000)
+            page.locator('[data-testid="stStatusWidget"]').wait_for(state='hidden',timeout=60000)
             if page.locator('[data-testid="stException"]').count():raise AssertionError('Streamlit exception: '+name)
-            if page.locator('[data-testid="stAlert"]').filter(has_text='无法连接').count():raise AssertionError('API unavailable')
+            faults=page.locator('[data-testid="stAlertContentError"]')
+            if faults.count():raise AssertionError('Page error: '+name+' '+faults.all_text_contents()[0])
+            if name!='overview' and not page.locator('[data-testid="stDataFrame"]').count():raise AssertionError('Missing real result table: '+name)
             geometry=page.evaluate('({width:innerWidth,scrollWidth:document.documentElement.scrollWidth})')
             if geometry['scrollWidth']>width+2:raise AssertionError('Horizontal page overflow: '+name+' '+str(geometry))
             path=output/f'{name}-{width}.png';page.screenshot(path=str(path),full_page=True)
