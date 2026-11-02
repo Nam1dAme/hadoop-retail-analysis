@@ -1,102 +1,81 @@
-# Hadoop 用户行为分析与预测
+# 行为观察 · Hadoop 用户行为分析与预测系统
 
-项目已完成环境、全量处理、正式模型训练、版本发布、只读API及七页工作台。100,150,807行源数据已通过Hadoop处理，3,653,540条预测逐条核验通过。M7规模阶梯与恢复验收仍在进行。冻结设计见[文档入口](docs/README.md)，结果见[M1—M3验收](docs/execution/2026-11-02-m123-acceptance.md)与[M5—M6验收](docs/execution/2026-11-03-m5-m6-acceptance.md)。
+面向亿级电商用户行为日志的分析与预测项目，覆盖数据导入、Hadoop 清洗聚合、时间样本构建、模型训练、版本发布和可视化查询。通过七页中文工作台，查看浏览、购买、加购与收藏的变化，分析商品、类目和用户活跃情况，并追踪数据质量、真实作业与模型实验。
 
-工作台沿用旧项目的蓝白风格，真实七页桌面/窄屏与正式API检查通过。10并发持续五分钟，p95为0.193秒、错误率0；该成绩限于报告中的工作负载。当前执行状态见[后续开发记录](docs/execution/2026-11-02-m4-m7-development.md)。
+## 主要功能
 
-当前源数据位于本项目`var/data/UserBehavior.csv`，是WSL本地文件，不是指向Windows挂载盘的符号链接。导入与环境锁脚本通过`config/development.toml`读取该路径。迁移前后的内容SHA256相同；历史基线、数据库来源记录与已发布产物清单中的旧路径记录当时的实际来源，不代表当前访问入口。数据文件位于Git忽略目录，不提交CSV。后续提交信息采用Conventional Commits：`type(scope): 中文描述`；type与scope保持英文，冒号后的描述使用中文，技术标识保留原样。
+- **行为与实体分析**：四类行为统计、区间精确去重用户数、按日/小时趋势、活跃热力图、商品与类目排行及单实体趋势。
+- **用户活跃与回访**：每日活跃、首次观察用户、次日复访和用户活动查询；观察期末日的次日复访保留为空。
+- **三种预测模型**：CONSTANT、LOGISTIC、GRU，使用过去 48 小时行为，预测未来 24 小时是否记录购买；历史测试与未观测的未来窗口分别展示。
+- **模型实验对比**：按时间划分训练、验证和测试数据，展示评价指标、训练曲线、校准分桶、混淆矩阵及真实 CPU/CUDA 性能对照。
+- **流程与版本管理**：来源与质量审计、真实 YARN 任务追踪、原子发布与回滚、只读 API、汇总报告导出和备份恢复工具。
 
-## 开发环境
+工作台包含 **行为总览、商品与类目、用户活跃、行为预测、模型实验、数据质量与任务、版本与方法** 七个页面，支持桌面和窄屏浏览。
 
-本机使用 Python 3.12.3、PyTorch 2.6.0+cu124、Java 11、Hadoop 3.4.2、MariaDB 10.11。Java/Hadoop 位于本项目 `var/tools`，Python 位于 `.venv`。驱动、CUDA安装和MariaDB程序复用宿主；数据库数据、账号、HDFS数据及所有配置独立。
+## 技术与数据
 
-首次搭建（WSL终端执行；网络与设备访问在Codex中需获准沙箱外执行）：
+```mermaid
+flowchart LR
+    A[UserBehavior CSV] --> B[HDFS 原始归档]
+    B --> C[Java MapReduce / YARN]
+    C --> D[行为聚合]
+    C --> E[时间样本与分片]
+    E --> F[PyTorch 训练与评分]
+    D --> G[MariaDB 版本化结果]
+    F --> G
+    G --> H[FastAPI 只读接口]
+    H --> I[Streamlit / Plotly]
+```
+
+HDFS 保存来源、事实、聚合、样本及模型归档；YARN 调度计算资源，MapReduce 执行清洗、统计与时间窗口处理，HistoryServer 提供作业历史。模型由独立的 PyTorch 进程训练，GRU 使用单卡 CUDA；样本按分片读取，避免把全量特征一次加载到内存。
+
+运行环境为 **WSL2 / Ubuntu、Python 3.12、Java 11、Hadoop 3.4.2、MariaDB 10.11、PyTorch 2.6.0+cu124**，Python 依赖由 uv 和 `uv.lock` 管理。
+
+数据来自 [天池 UserBehavior](https://tianchi.aliyun.com/dataset/649)，本地文件共 **100,150,807 行**，包含用户 ID、商品 ID、类目 ID、行为类型和 Unix 时间戳。分析窗口为北京时间 **2017-11-25 至 2017-12-04（不含）**；`pv`、`buy`、`cart`、`fav` 分别表示浏览、购买、加购和收藏。
+
+购买次数表示 `buy` 行为记录，数据没有金额、订单号或商品名称。数据许可说明文字与链接的差异记录在[来源核验](docs/execution/2026-11-02-dataset-source.json)中；仓库不分发原始数据。
+
+## 已验证结果与当前进度
+
+| 项目 | 实际结果 |
+|---|---|
+| 全量数据处理 | 100,150,807 行完成处理；100 万、1000 万及全量分析规模阶梯通过 |
+| 模型与预测 | 三种模型完成测试评价；3,653,540 条已发布预测逐条对账通过 |
+| 查询性能 | 10 并发持续五分钟，共 26,804 次请求，p95 为 0.193 秒，错误率 0 |
+| 页面与交互 | 七页覆盖 320–1440px 五种宽度，共 35 组页面与 85 组按钮状态检查通过 |
+
+性能结果限于记录中的硬件、数据与测试负载；模型参数、阈值及模型选择仅使用验证集，测试集用于封存评价。当前部署为单机伪分布式、HDFS 副本 1；本机备份恢复仍在验收，独立介质备份尚未验收。
+
+## 本机运行
+
+先按[运行与验收手册](docs/execution/2026-11-02-runbook.md)准备依赖、数据库、Hadoop 和已发布数据，再在仓库根目录启动：
 
 ```bash
-python3 scripts/bootstrap-tools.py
-# 可使用同一文件系统上的旧缓存实现硬链接，缓存路径不影响依赖锁。
-UV_CACHE_DIR=/home/hadoop/hadoop-lab/var/cache/uv uv sync --locked --link-mode hardlink
 source scripts/dev-env.sh
-.venv/bin/python scripts/database-service.py init
-scripts/hadoop-service.sh init
+python scripts/database-service.py start
 scripts/hadoop-service.sh start
-```
-
-已有安装日常启动：
-
-```bash
-source scripts/dev-env.sh
-.venv/bin/python scripts/database-service.py start
-scripts/hadoop-service.sh start
-scripts/hadoop-service.sh status
-```
-
-环境验证：
-
-```bash
-source scripts/dev-env.sh
-python scripts/check-environment.py
-scripts/check-hadoop.sh
-```
-
-`check-environment.py`验证FP32/AMP CUDA更新、检查点及数据库最小权限；输出`var/environment-probe.json`。`check-hadoop.sh`编译Java11探针，向HDFS写入5条合成行为并提交真实YARN统计，预期pv=2、buy/cart/fav各1；证据在`var/probes/`。它不构成正式全量分析或模型训练验收。
-
-## 连接与停止
-
-- HDFS RPC：`hdfs://127.0.0.1:19000`；NameNode页面：<http://127.0.0.1:19870>。
-- YARN页面：<http://127.0.0.1:18088>；客户端地址：`127.0.0.1:18032`。
-- 数据库：`127.0.0.1:3307/behavior_analytics`。reader/writer/migrator凭据仅在`var/secrets/*.cnf`（权限0600）。管理入口为当前WSL用户的本项目Unix socket认证。
-- 示例：`mariadb --defaults-extra-file="$PWD/var/secrets/reader.cnf" -e 'SELECT 1'`。
-- API/UI使用8010/8510，均绑定localhost。未发布时返回明确空态，不展示随机数据。loader凭据同样保存在`var/secrets/loader.cnf`，与控制writer及API reader分离。
-
-```bash
-scripts/hadoop-service.sh stop
-python scripts/database-service.py stop
-```
-
-启动和停止脚本只管理本项目私有PID目录及数据库socket；不操作旧项目服务。YARN启用本项目文件状态存储，保留已完成应用记录；重启不保留正在运行的容器，重任务需由后续编排恢复。HDFS init仅允许空目录或已初始化目录，不重新格式化已有实例。依赖`setsid`使守护进程脱离启动终端；WSL退出/重启后需重新启动。当前不是系统自启动服务。
-
-## 锁定与版本管理
-
-`uv.lock`锁定全部Python依赖，`config/toolchain.lock.json`锁定Java/Hadoop发行包及官方摘要，`config/environment.lock.json`记录本机实际版本和配置hash。机器相关安装与数据都在忽略的`var`目录，凭据、CSV、模型、缓存和`.venv`不提交Git。
-
-后续修改依赖用`uv lock`并重新验证；不要修改旧项目的虚拟环境或全局Java。HDFS为单机副本1，仅限本地研究。M1—M3已完成全量画像、阶段数据库迁移与样本准备；容量阶梯、正式训练和独立备份仍须在后续阶段验收。
-
-## M1—M3 数据链路
-
-```bash
-# 已生成的完整批次；status只读，不重新计算。
-scripts/behaviorctl --baseline UBA-DOC-1.0.0 status --batch-id 1c577aba-46f2-4710-b296-5f29ac842921
-# 新源的标准处理流程（同实现可复用成功产物；代码或参数变化产生新尝试）。
-scripts/build-jobs.sh
-scripts/behaviorctl --baseline UBA-DOC-1.0.0 --credentials var/secrets/migrator.cnf migrate
-scripts/behaviorctl --baseline UBA-DOC-1.0.0 ingest --source-url https://tianchi.aliyun.com/dataset/649
-scripts/behaviorctl --baseline UBA-DOC-1.0.0 pipeline --batch-id <UUID> --through J06
-scripts/behaviorctl --baseline UBA-DOC-1.0.0 prepare-samples --batch-id <UUID>
-```
-
-具体契约见[导入](ingest/README.md)、[Hadoop作业](jobs/README.md)、[分片](ml/README.md)、[迁移](migrations/README.md)。完整执行入口为`python scripts/run-m123.py`，独立验收为`python scripts/verify-m123.py`。运行日志、质量报告和结果索引在`var/production/`，不会提交原始数据和分片。
-
-当前样本索引为`var/production/samples.json`：TRAIN3463211、VALIDATION877575、TEST888982、FORECAST986594；总计6216362条、192个分片。未来窗口标签为-1，业务上表示尚无观测结果。M4可直接消费此已验证缓存及其manifest，无需为查看数据反复执行pipeline。
-
-质量或任务失败返回非零退出码；查看对应`var/production/runs/<run_id>/driver.log`。`resume --batch-id <UUID> --through J06`从可校验结果继续；应用终态或原进程存活情况不明确时拒绝重复提交。`--dry-run`须放在子命令之前，只读检查依赖并打印计划。
-
-## 后续阶段入口
-
-```bash
-source scripts/dev-env.sh
-# 全量正式实验及同一检查点恢复；有重任务在运行时拒绝重复启动。
-python scripts/train-models.py
-# 模型实验成功后依次执行，不能省略验证和测试封存。
-python scripts/setup-loader.py
-python scripts/publish-results.py forecast
-python scripts/publish-results.py publish
-# 查询服务和页面；默认分别为 http://127.0.0.1:8010 与 :8510。
 python scripts/web-service.py start
+```
+
+访问 **<http://127.0.0.1:8510>**，接口文档位于 **<http://127.0.0.1:8010/api/v1/docs>**。服务状态和停止命令：
+
+```bash
 python scripts/web-service.py status
 python scripts/web-service.py stop
 ```
 
-工作台沿用旧项目实际Streamlit应用的蓝白配色与本地字体。页面不直接加载模型或读取HDFS；所有查询固定到一个完整发布版本。角色分离检查为`python tests/verify_permissions.py`。
+页面通过只读 API 查询固定的已发布版本。新数据经离线 CLI 处理、训练并发布后，可在页面切换到新版本；日常查看结果无需重新训练。
 
-M7工具包括`setup-scale.py`/`run-scale.py`、`load-test-api.py`、`backup-release.py`/`restore-backup.py`。规模测试使用独立库和HDFS根；记录抽样仅用于处理性能。备份与恢复均在本项目目录和隔离实例内进行。用户已确认没有另一块硬盘，因此本地副本及恢复演练不能满足独立介质备份门禁。
+新克隆的仓库仅包含源码与文档。数据集需自行取得并放到项目的 `var/data/UserBehavior.csv`，数据库文件、模型、缓存与凭据均保留在被忽略的 `var/` 目录。换机器或安装路径时，需调整 `config/development.toml` 及 `config/hadoop/` 中的本机绝对路径；尚未发布时页面显示明确空态。
+
+## 文档导航
+
+| 内容 | 入口 |
+|---|---|
+| 环境与初始化 | [环境搭建记录](docs/execution/2026-11-02-environment.md) · [数据库迁移](migrations/README.md) |
+| 运行与维护 | [启动、发布、恢复与空间管理](docs/execution/2026-11-02-runbook.md) |
+| 数据与计算 | [数据导入](ingest/README.md) · [MapReduce 作业](jobs/README.md) · [时间样本与分片](ml/README.md) |
+| 算法与服务 | [模型与评价设计](docs/07-models.md) · [API 契约](docs/08-api.md) · [OpenAPI](service/openapi.json) |
+| 实测与优化 | [全量数据链路验收](docs/execution/2026-11-02-m123-acceptance.md) · [发布与应用验收](docs/execution/2026-11-03-m5-m6-acceptance.md) · [查询优化](docs/execution/2026-11-02-query-optimization.md) |
+| 页面设计 | [侧栏交互与响应式边界验收](docs/execution/2026-11-03-ui-interaction-plan.md) |
+| 设计与进度 | [冻结设计基线](docs/README.md) · [后续开发执行记录](docs/execution/2026-11-02-m4-m7-development.md) |
