@@ -84,23 +84,23 @@ class ShardDataset:
                     if bytes(arrays['sample_key'][i])!=expected:raise ManifestError('Sample key does not match source user and anchor')
             if 'seen_count' in self.manifest and (seen,count-seen)!=(self.manifest['seen_count'],self.manifest['unseen_count']):raise ManifestError('Cohort counts differ')
             if (count,positive,negative)!=(self.manifest['rows'],self.manifest['positive_count'],self.manifest['negative_count']):raise ManifestError('Shard population differs')
-    def batches(self,batch_size=256,seed=42,epoch=0,shuffle=True):
+    def batches(self,batch_size=256,seed=42,epoch=0,shuffle=True,columns=None):
         if batch_size<1:raise ValueError('batch_size must be positive')
         rng=np.random.default_rng(seed+epoch);shards=list(self.manifest['shards'])
         if shuffle:rng.shuffle(shards)
         for shard in shards:
-            p=self.path/shard['directory'];arrays={k:np.load(p/(k+'.npy'),mmap_mode='r',allow_pickle=False) for k in SPECS}
+            p=self.path/shard['directory'];arrays={k:np.load(p/(k+'.npy'),mmap_mode='r',allow_pickle=False) for k in (SPECS if columns is None else columns)}
             order=rng.permutation(shard['rows']) if shuffle else np.arange(shard['rows'])
             for start in range(0,len(order),batch_size):
                 indices=order[start:start+batch_size]
                 yield {k:np.array(a[indices],copy=True) for k,a in arrays.items()}
 
-def training_groups(dataset,micro_batch=256,effective_batch=512,seed=42,epoch=0):
+def training_groups(dataset,micro_batch=256,effective_batch=512,seed=42,epoch=0,columns=None):
     """跨分片累计到有效batch；返回按真实样本数归一的每个microbatch权重。"""
     if dataset.path.name!='TRAIN':raise ValueError('Training groups require TRAIN samples')
     if micro_batch<1 or effective_batch<1 or micro_batch>effective_batch:raise ValueError('Invalid batch sizes')
     group=[];total=0
-    for batch in dataset.batches(micro_batch,seed,epoch,shuffle=True):
+    for batch in dataset.batches(micro_batch,seed,epoch,shuffle=True,columns=columns):
         offset=0;n=len(batch['label'])
         while offset<n:
             take=min(n-offset,effective_batch-total)
