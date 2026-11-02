@@ -62,7 +62,7 @@ def make_backup(lease):
     started=time.monotonic();dump=directory/'database.sql'
     sql_backup(lease.config,ROOT/'var/secrets/migrator.cnf',dump)
     dump_hash=sha(dump);archive=directory/'backup.tar.gz'
-    with os.fdopen(os.open(archive,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600),'wb') as output,gzip.GzipFile(fileobj=output,mode='wb',compresslevel=1,mtime=0) as compressed,tarfile.open(fileobj=compressed,mode='w|') as tar:
+    with os.fdopen(os.open(archive,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600),'wb') as output,gzip.GzipFile(fileobj=output,mode='wb',compresslevel=1,mtime=0) as compressed,tarfile.open(fileobj=compressed,mode='w|',copybufsize=1024**2) as tar:
         tar.add(dump,arcname='database.sql',recursive=False)
         local_files=[ROOT/'README.md',ROOT/'uv.lock',*sorted((ROOT/'config').rglob('*')),*sorted((ROOT/'var/history-rewrite').rglob('commit-map.json')),*sorted((ROOT/'var/history-rewrite').rglob('*.bundle'))]
         local_files += [ROOT/'var/production'/name for name in ('m123-verification.json','models.json','forecast.json','release.json','cuda-recovery-test.json')]
