@@ -156,3 +156,19 @@ def test_exact_range_ranking_bound_ties_and_pagination(api):
         position=[str(rows[-1]['event_count']),rows[-1]['entity_id'],len(ordered)]
     assert ordered==[str(1000+i) for i in range(100)]
     with pytest.raises(TimeoutError):rank_entities(pool,rid,base,base+timedelta(days=4),'ITEM','fav',10,chunk=7,max_candidates=5)
+
+
+def test_real_sql_timeout_has_actionable_error_without_claiming_db_down(api):
+    class SlowPool(Pool):
+        def all(self,sql,args=(),**kwargs):
+            if sql.startswith('SELECT entity_id,event_count FROM entity_daily'):
+                return super().all('SELECT SLEEP(0.1)',timeout=.01)
+            return super().all(sql,args,**kwargs)
+    pool=SlowPool(api['config'],ROOT/'var/secrets/test_reader.cnf')
+    with TestClient(create_app(api['config'],pool=pool,cursor_key=b't'*32)) as client:
+        response=client.get('/api/v1/entities',params={'release_id':api['release']})
+        assert response.status_code==503
+        assert response.json()['error']['code']=='DEPENDENCY_UNAVAILABLE'
+        assert '查询超过时限' in response.json()['error']['message']
+        assert response.json()['error']['request_id']==response.headers['X-Request-ID']
+    assert api['pool'].one('SELECT 1 AS ok')['ok']==1

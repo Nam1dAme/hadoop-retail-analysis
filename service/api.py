@@ -122,8 +122,10 @@ def create_app(config=None,pool=None,cursor_key=None):
     async def envelope(request:Request,call_next):
         request.state.request_id=str(uuid4())
         try:response=await call_next(request)
-        except (pymysql.MySQLError,TimeoutError,OSError):
-            response=JSONResponse({'error':{'code':'DEPENDENCY_UNAVAILABLE','message':'结果库暂不可用，请稍后重试。','request_id':request.state.request_id}},status_code=503)
+        except (pymysql.MySQLError,TimeoutError,OSError) as error:
+            timed_out=isinstance(error,TimeoutError) or (isinstance(error,pymysql.MySQLError) and error.args and error.args[0] in (1969,3024))
+            message='查询超过时限，请调整查询范围或分页后重试。' if timed_out else '结果库暂不可用，请稍后重试。'
+            response=JSONResponse({'error':{'code':'DEPENDENCY_UNAVAILABLE','message':message,'request_id':request.state.request_id}},status_code=503)
         except Exception:
             response=JSONResponse({'error':{'code':'INTERNAL_ERROR','message':'查询未完成，请保留请求编号重试。','request_id':request.state.request_id}},status_code=500)
         response.headers['X-Request-ID']=request.state.request_id
