@@ -80,6 +80,8 @@ def make_backup(lease):
             local_files.extend(sorted((ROOT/'var/production'/folder).glob('*.png')))
         if (ROOT/'var/fixtures/hotspot-verification.json').exists():local_files.append(ROOT/'var/fixtures/hotspot-verification.json')
         if (ROOT/'var/production/acceptance/status.json').exists():local_files.append(ROOT/'var/production/acceptance/status.json')
+        for name in ('ranking-development-regression.log','entity-lookup-contract.log','user-time-contract.log','api-timeout-contract.log','java-npy-contracts.log'):
+            if (ROOT/'var/production'/name).exists():local_files.append(ROOT/'var/production'/name)
         bundle=directory/'source.bundle';subprocess.run(['git','bundle','create',str(bundle),'--all'],cwd=ROOT,check=True);local_files.append(bundle)
         for local in local_files:
             if local.is_file():tar.add(local,arcname='project/'+str(local.relative_to(ROOT)),recursive=False)
