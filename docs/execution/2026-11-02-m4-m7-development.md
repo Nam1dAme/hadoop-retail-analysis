@@ -4,7 +4,7 @@
 
 ## 当前已验证
 
-- 24项项目回归测试通过，日志`var/production/development-regression.log`。包含模型极小样本真实梯度/过拟合、权重加载、PAD因果性、外排序同分与独立公式、分片契约、真实隔离MariaDB的15个API和七页Streamlit渲染、装载中断/幂等、双连接发布CAS和回滚。
+- 当前环境下25项项目回归测试通过，日志`var/production/final-development-regression.log`；此前24项日志另存。包含模型极小样本真实梯度/过拟合、权重加载、PAD因果性、外排序同分与独立公式、分片契约、真实隔离MariaDB的15个API和七页Streamlit渲染、装载中断/幂等、双连接发布CAS和回滚。
 - Java既有契约在新增热点验算入口后仍通过，日志`var/production/java-contracts-m7.log`；新增热点入口尚未提交真实YARN，不能标为通过。
 - FP32设备对照使用共同TRAIN样本hash、同初始权重与CPU生成的共同Dropout掩码；CPU/CUDA各3次200步。中位数11.5859/2.3875秒，约4.8527倍，第一步loss差0。证据在正式实验目录`benchmark.json`。这是该固定FP32实验，不等同正式AMP训练加速比。
 - 正式CONSTANT、两个LOGISTIC及两个CUDA GRU候选全部完成；每个完整epoch均处理3463211条TRAIN样本，溢出跳步另记。选择在2026-11-02T12:51:58.863036Z封存，独立核验`var/production/model-verification.json`为PASS；核验全部产物与检查点输出、选择规则及指标。选中GRU学习率0.0003，第9轮为最佳验证检查点；未依据TEST重新调参。
@@ -12,6 +12,7 @@
 - 真实桌面与390px浏览器空态截图通过，窄屏scrollWidth=390。字体源沿用旧项目缓存的IBM Plex Sans/Noto Sans SC，重新生成本项目字形子集，保留许可。正式发布后的14张七页截图尚待执行。
 - PyArrow26与固定NumPy1.26不兼容，首次真实表格渲染失败；已单独锁定PyArrow19.0.1，七页测试重新通过。初始环境/uv锁与恢复后实际包版本说明保存在模型实验目录，没有把UI依赖调整伪装成原始锁未变化。
 - 私有HistoryServer已在19888真实就绪；修复Hadoop3.4.2的“stopped仍返回0”状态误判，启动依据状态文本及HTTP门禁。
+- 实际探针发现连接池重连会把数据库端查询限时由5秒复位到0；已在每次取得连接时恢复会话限时，并以真实隔离数据库的新旧连接ID及会话变量验证。附加回归1项通过，日志`var/production/pool-reconnect-regression.log`，服务已重启载入修复。
 - 控制writer、结果loader、API reader分离；真实非变更数据权限探针通过，DDL及FILE权限被拒绝。`var/production/permission-verification.json`为PASS。
 - 当前PyArrow19.0.1及权限收紧后的CUDA/数据库探针重新通过，后续环境锁已更新；旧锁保留在`var/runtime-environments/pre-m7/`，正式模型归档仍保留其历史锁和依赖调整说明。
 - WebHDFS真实小文件上传/下载/摘要探针通过。DataNode公布主机名而仅绑定回环，客户端已限定重定向到本机19864。完整备份/恢复仍待运行。
