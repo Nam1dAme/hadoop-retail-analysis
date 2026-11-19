@@ -7,7 +7,6 @@ import pytest
 from orchestration.common import ROOT,now,fingerprint,PipelineError,ManifestError
 from orchestration.database import connect
 from publication.release import load_rows,publish_pointer
-from test_api import api
 
 pytestmark=pytest.mark.skipif(os.environ.get('BEHAVIOR_INTEGRATION')!='1',reason='Requires explicit isolated MariaDB release integration execution')
 

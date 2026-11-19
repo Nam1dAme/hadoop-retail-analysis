@@ -3,7 +3,6 @@ import pytest
 from streamlit.testing.v1 import AppTest
 from orchestration.common import ROOT
 from app.client import BehaviorAPI,ApiFault
-from test_api import api
 
 pytestmark=pytest.mark.skipif(os.environ.get('BEHAVIOR_INTEGRATION')!='1',reason='Requires explicit isolated API/UI integration execution')
 
