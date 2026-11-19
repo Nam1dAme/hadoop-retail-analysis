@@ -3,9 +3,13 @@ set -euo pipefail
 source "$(dirname "$0")/dev-env.sh"
 mkdir -p "$HADOOP_LOG_DIR" "$HADOOP_PID_DIR"
 cd "$BEHAVIOR_ROOT"
+PYTHON_BIN="$BEHAVIOR_ROOT/.venv/bin/python"
+if [ ! -x "$PYTHON_BIN" ]; then
+  PYTHON_BIN="$(command -v python3)"
+fi
 case "${1:-status}" in
   init)
-    .venv/bin/python - <<'PY'
+    "$PYTHON_BIN" - <<'PY'
 from pathlib import Path
 import os,subprocess
 root=Path(os.environ['BEHAVIOR_ROOT'])
@@ -37,11 +41,17 @@ PY
       fi
     done
     timeout 120 hdfs dfsadmin -safemode wait
-    python - <<'PYREADY'
-import json,time,urllib.request
+    "$PYTHON_BIN" - <<'PYREADY'
+import json,sys,time,urllib.request
+from pathlib import Path
+sys.path.insert(0,str(Path('.').resolve()))
+from scripts._common import history_base_url,load_dev_config,yarn_base_url
+cfg=load_dev_config()
+yarn_url=yarn_base_url(cfg)
+history_url=history_base_url(cfg)
 for _ in range(60):
  try:
-  with urllib.request.urlopen('http://127.0.0.1:18088/ws/v1/cluster/nodes',timeout=2) as r:
+  with urllib.request.urlopen(yarn_url+'/ws/v1/cluster/nodes',timeout=2) as r:
    nodes=json.load(r).get('nodes') or {}
   if any(n['state']=='RUNNING' for n in nodes.get('node',[])):
    print('HDFS 可写、YARN 节点已就绪');break
@@ -50,7 +60,7 @@ for _ in range(60):
 else:raise SystemExit('YARN节点未在120秒内就绪')
 for _ in range(60):
  try:
-  with urllib.request.urlopen('http://127.0.0.1:19888/ws/v1/history/info',timeout=2) as r:
+  with urllib.request.urlopen(history_url+'/ws/v1/history/info',timeout=2) as r:
    assert json.load(r)['historyInfo']
   print('MapReduce HistoryServer 已就绪');break
  except (OSError,ValueError,KeyError,AssertionError):pass

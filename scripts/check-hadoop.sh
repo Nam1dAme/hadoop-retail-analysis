@@ -19,7 +19,11 @@ hdfs dfs -mkdir -p "$hdfs_probe/input"
 hdfs dfs -put "$local_probe/input.csv" "$hdfs_probe/input/"
 hadoop jar "$local_probe/probe.jar" BehaviorEnvironmentProbe "$hdfs_probe/input" "$hdfs_probe/output" 2>&1 | tee "$local_probe/job.log"
 hdfs dfs -cat "$hdfs_probe/output/part-r-*" > "$local_probe/result.tsv"
-python - "$local_probe" "$hdfs_probe" <<'PY'
+PYTHON_BIN="$BEHAVIOR_ROOT/.venv/bin/python"
+if [ ! -x "$PYTHON_BIN" ]; then
+  PYTHON_BIN="$(command -v python3)"
+fi
+"$PYTHON_BIN" - "$local_probe" "$hdfs_probe" <<'PY'
 import json,re,sys
 from pathlib import Path
 p=Path(sys.argv[1])

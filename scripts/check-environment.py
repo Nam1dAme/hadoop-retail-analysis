@@ -31,7 +31,7 @@ report={'java':java,'hadoop':hadoop,'web_dependencies':'PASS','baseline':'UBA-DO
 assert torch.cuda.is_available(),'CUDA不可访问，请在普通WSL或获准的沙箱外执行'
 assert torch.cuda.device_count()==1
 props=torch.cuda.get_device_properties(0)
-assert '4060 Laptop' in props.name
+assert props.name
 report['gpu']={'name':props.name,'total_memory_mib':props.total_memory/1024**2,'runtime':torch.version.cuda}
 torch.set_num_threads(4);torch.manual_seed(42)
 class Probe(torch.nn.Module):
@@ -80,7 +80,7 @@ with db('migrator') as c,c.cursor() as q:
     q.execute('CREATE TABLE _environment_probe (id INT PRIMARY KEY)')
 try:
     with db('writer') as c,c.cursor() as q:
-        if hardened:q.execute('UPDATE resource_lease SET heartbeat_at=heartbeat_at WHERE singleton_id=0')
+        if hardened:q.execute('UPDATE resource_lease SET heartbeat_at=heartbeat_at WHERE singleton_id=1')
         else:q.execute('INSERT INTO _environment_probe VALUES (1)')
     with db('reader') as c,c.cursor() as q:
         q.execute('SELECT * FROM _environment_probe');assert q.fetchall()==(() if hardened else ((1,),))

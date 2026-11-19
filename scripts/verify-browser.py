@@ -6,6 +6,9 @@ import json
 import time
 from playwright.sync_api import sync_playwright
 ROOT=Path(__file__).resolve().parents[1]
+sys.path.insert(0,str(ROOT))
+from scripts._common import load_dev_config,ui_base_url
+UI_BASE=ui_base_url(load_dev_config())
 output=ROOT/'var/production/browser';output.mkdir(parents=True,exist_ok=True)
 pages={'overview':'行为总览','entities':'商品与类目','activity':'用户活跃','predictions':'行为预测',
        'experiments':'模型实验','quality':'数据质量与任务','versions':'版本与方法'}
@@ -16,7 +19,7 @@ with sync_playwright() as p:
         context=browser.new_context(viewport={'width':width,'height':height},device_scale_factor=1)
         page=context.new_page();errors=[];page.on('pageerror',lambda error:errors.append(str(error)))
         for name,label in pages.items():
-            page.goto('http://127.0.0.1:8510/?page='+name,wait_until='domcontentloaded')
+            page.goto(f'{UI_BASE}/?page='+name,wait_until='domcontentloaded')
             page.get_by_role('heading',name=label,exact=True).wait_for(timeout=30000)
             page.get_by_text('数据版本已固定',exact=False).wait_for(timeout=30000)
             # The marker is emitted only after the complete view has successfully returned.

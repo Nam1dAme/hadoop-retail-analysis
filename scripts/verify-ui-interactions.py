@@ -6,7 +6,9 @@ import sys
 from playwright.sync_api import sync_playwright
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 from orchestration.common import ROOT,atomic_json,sha,stamp,commit
+from scripts._common import load_dev_config,ui_base_url
 
+UI_BASE=ui_base_url(load_dev_config())
 OUT=ROOT/'var/production/ui-review';OUT.mkdir(exist_ok=True)
 PAGES={'overview':'行为总览','entities':'商品与类目','activity':'用户活跃','predictions':'行为预测','experiments':'模型实验','quality':'数据质量与任务','versions':'版本与方法'}
 report=dict(status='RUNNING',started_at=stamp(),code_commit=commit(),theme_sha256=sha(ROOT/'app/assets/theme.css'),config_sha256=sha(ROOT/'.streamlit/config.toml'),pages=[],sidebar=[],buttons=[],screenshots=[])
@@ -66,7 +68,7 @@ try:
         browser=p.chromium.launch(headless=True,args=['--disable-gpu'])
         for width,height in ((1440,1000),(1280,720),(768,900),(390,844),(320,640)):
             context=browser.new_context(viewport={'width':width,'height':height});page=context.new_page()
-            page.goto('http://127.0.0.1:8510/?page=overview',wait_until='domcontentloaded');ready(page,'overview')
+            page.goto(f'{UI_BASE}/?page=overview',wait_until='domcontentloaded');ready(page,'overview')
             expanded(page,True);page.mouse.move(width-4,400);page.wait_for_timeout(200)
             labels=page.locator('.st-key-navigation label[data-baseweb="radio"]')
             before=labels.evaluate_all('(nodes)=>nodes.map(n=>{let r=n.getBoundingClientRect();return [r.x,r.y,r.width,r.height]})')
@@ -97,7 +99,7 @@ try:
                     page.locator('.st-key-navigation label[data-baseweb="radio"]').filter(has_text=PAGES[target]).click();ready(page,target)
                     assert 'page='+target in page.url
             for name,title in PAGES.items():
-                page.goto('http://127.0.0.1:8510/?page='+name,wait_until='domcontentloaded');ready(page,name)
+                page.goto(f'{UI_BASE}/?page='+name,wait_until='domcontentloaded');ready(page,name)
                 if width<1280:expanded(page,False)
                 for detail in page.locator('details').all():
                     if detail.get_attribute('open') is None:detail.locator('summary').click()

@@ -15,6 +15,7 @@ from orchestration.storage import Hdfs
 from orchestration.pipeline import validate
 from service.database import Pool
 from service.ranking import rank_entities
+from scripts._common import api_base_url,load_dev_config
 
 class Traced:
     def __init__(self,pool):self.pool=pool;self.queries=0;self.transferred_rows=0
@@ -60,8 +61,9 @@ def main():
                 evaluate(start,stop,kind,behavior,len(expected),expected)
                 params=dict(release_id=rid,start=str(start),end=str(stop),entity_type=kind,behavior=behavior,limit=20)
                 received=[]
+                api_base=api_base_url(load_dev_config())
                 for _ in range(2):
-                    with urllib.request.urlopen('http://127.0.0.1:8010/api/v1/entities?'+urllib.parse.urlencode(params),timeout=7) as r:value=json.load(r)
+                    with urllib.request.urlopen(f'{api_base}/entities?'+urllib.parse.urlencode(params),timeout=7) as r:value=json.load(r)
                     assert value['meta']['release_id']==rid
                     received.extend(value['data']);http_pages+=1
                     if not value['meta']['next_cursor']:break

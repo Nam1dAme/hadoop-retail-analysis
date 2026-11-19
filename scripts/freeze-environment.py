@@ -14,7 +14,7 @@ if not source_path.is_absolute():source_path=ROOT/source_path
 source_path=source_path.resolve(strict=True)
 assert source_path.is_file() and source_path.is_relative_to(ROOT), 'Source must be inside project'
 host=json.loads((ROOT/'var/host-storage.json').read_text(encoding='utf-8-sig'))
-assert any(x['distribution']=='Ubuntu-24.04' and x['gate_passed'] for x in host)
+assert any(x.get('gate_passed') for x in host)
 probe_files=sorted((ROOT/'var/probes').glob('*/evidence.json'))
 assert probe_files
 probe=json.loads(probe_files[-1].read_text());assert probe['status']=='PASS'

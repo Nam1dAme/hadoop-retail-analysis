@@ -6,6 +6,7 @@ from pathlib import Path
 import subprocess
 import tarfile
 import tempfile
+import urllib.parse
 
 ROOT=Path(__file__).resolve().parents[1]
 lock=json.loads((ROOT/'config/toolchain.lock.json').read_text())
@@ -14,9 +15,13 @@ for name in ['java','hadoop']:
     if target.exists():
         print(f'{name}: 已存在，使用check-environment及版本锁核验');continue
     downloads=ROOT/'var/downloads';downloads.mkdir(parents=True,exist_ok=True)
-    archive=downloads/f'{name}-locked.tar.gz'
+    url_name=Path(urllib.parse.unquote(urllib.parse.urlparse(spec['url']).path)).name
+    archive=downloads/url_name
+    legacy_archive=downloads/f'{name}-locked.tar.gz'
+    if not archive.exists() and legacy_archive.exists():
+        archive=legacy_archive
     if not archive.exists():
-        partial=archive.with_suffix('.partial')
+        partial=downloads/f'{url_name}.partial'
         subprocess.run(['curl','--fail','--location','--retry','2','--output',str(partial),spec['url']],check=True)
         partial.rename(archive)
     algo='sha256' if name=='java' else 'sha512'
@@ -30,4 +35,5 @@ for name in ['java','hadoop']:
         children=list(Path(work).iterdir())
         if len(children)!=1 or not children[0].is_dir():raise SystemExit('Unexpected archive structure')
         children[0].rename(target)
+    archive.unlink(missing_ok=True)
     print(f'{name}: installed and checksum verified')

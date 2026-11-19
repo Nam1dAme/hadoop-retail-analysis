@@ -6,6 +6,9 @@ import sys
 from playwright.sync_api import sync_playwright
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 from orchestration.common import ROOT,atomic_json,sha,stamp,commit
+from scripts._common import load_dev_config,ui_base_url
+
+UI_BASE=ui_base_url(load_dev_config())
 
 output=ROOT/'var/production/browser-selected-model';output.mkdir(exist_ok=True)
 release=json.loads((ROOT/'var/production/release.json').read_text())['release_id']
@@ -19,7 +22,7 @@ try:
         browser=p.chromium.launch(headless=True,args=['--disable-gpu'])
         for width,height in ((1600,1100),(390,844)):
             context=browser.new_context(viewport={'width':width,'height':height});page=context.new_page()
-            page.goto('http://127.0.0.1:8510/?page=experiments',wait_until='domcontentloaded')
+            page.goto(f'{UI_BASE}/?page=experiments',wait_until='domcontentloaded')
             page.locator('[data-behavior-page-ready="experiments"],[data-testid="stAlertContentError"],[data-testid="stException"]').first.wait_for(state='attached',timeout=30000)
             assert not page.locator('[data-testid="stException"],[data-testid="stAlertContentError"]').count()
             assert release in page.locator('.context-bar').inner_text()
