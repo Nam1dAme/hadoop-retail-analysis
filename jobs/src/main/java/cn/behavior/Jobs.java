@@ -23,7 +23,7 @@ public final class Jobs extends Configured implements Tool {
     conf.setBoolean("mapreduce.map.speculative",false);conf.setBoolean("mapreduce.reduce.speculative",false);
     Job j=Job.getInstance(conf,"behavior-"+stage+"-"+conf.get("behavior.run.id","test"));j.setJarByClass(Jobs.class);
     j.setNumReduceTasks(reducers);j.setInputFormatClass(SequenceFileInputFormat.class);
-    j.setOutputFormatClass(SequenceFileOutputFormat.class);
+    LazyOutputFormat.setOutputFormatClass(j,SequenceFileOutputFormat.class);
     j.setOutputKeyClass(Text.class);j.setOutputValueClass(Text.class);
     FileOutputFormat.setCompressOutput(j,true);SequenceFileOutputFormat.setOutputCompressionType(j,SequenceFile.CompressionType.BLOCK);
     switch(stage){
@@ -32,12 +32,12 @@ public final class Jobs extends Configured implements Tool {
         MultipleOutputs.addNamedOutput(j,"facts",SequenceFileOutputFormat.class,LongWritable.class,Event.class);
         MultipleOutputs.addNamedOutput(j,"rejected",TextOutputFormat.class,Text.class,Text.class);break;
       case "J02":
-        j.setMapperClass(Profile.Map.class);j.setReducerClass(Profile.Reduce.class);secondary(j,Text.class);j.setOutputValueClass(LongWritable.class);break;
+        j.setMapperClass(Profile.Map.class);j.setCombinerClass(Profile.Combine.class);j.setReducerClass(Profile.Reduce.class);secondary(j,Text.class);j.setOutputValueClass(LongWritable.class);break;
       case "J03":
         j.setMapperClass(Analytics.CubeMap.class);j.setMapOutputKeyClass(Text.class);j.setMapOutputValueClass(LongWritable.class);j.setCombinerClass(Analytics.Sum.class);j.setReducerClass(Analytics.CubeReduce.class);j.setOutputValueClass(LongWritable.class);
         MultipleOutputs.addNamedOutput(j,"aggregates",SequenceFileOutputFormat.class,Text.class,LongWritable.class);break;
       case "J03rank":
-        j.setMapperClass(Ranking.Map.class);j.setReducerClass(Ranking.Reduce.class);secondary(j,Text.class);break;
+        j.setMapperClass(Ranking.Map.class);j.setCombinerClass(Ranking.Combine.class);j.setReducerClass(Ranking.Reduce.class);secondary(j,Text.class);break;
       case "J04users":
         j.setMapperClass(Analytics.UserMap.class);j.setReducerClass(Analytics.UserReduce.class);secondary(j,Event.class);
         MultipleOutputs.addNamedOutput(j,"users",SequenceFileOutputFormat.class,Text.class,Text.class);break;

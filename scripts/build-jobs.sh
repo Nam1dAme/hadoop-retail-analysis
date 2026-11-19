@@ -2,7 +2,12 @@
 set -euo pipefail
 source "$(dirname "$0")/dev-env.sh"
 cd "$BEHAVIOR_ROOT"
-python - <<'PY'
+rm -rf "$BEHAVIOR_ROOT/jobs/target/classes"
+PYTHON="$BEHAVIOR_ROOT/.venv/bin/python"
+if [[ ! -x "$PYTHON" ]]; then
+  PYTHON="$(command -v python3)"
+fi
+"$PYTHON" - <<'PY'
 from pathlib import Path
 import os,subprocess,tempfile,zipfile
 root=Path.cwd();target=root/'jobs/target';target.mkdir(exist_ok=True)

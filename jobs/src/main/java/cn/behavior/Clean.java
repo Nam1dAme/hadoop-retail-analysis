@@ -12,7 +12,7 @@ public final class Clean extends Mapper<LongWritable,Text,Text,Event> {
     c.getCounter("BEHAVIOR","raw_rows").increment(1);
     try {
       Event e=Event.parse(line.getBytes(),line.getLength(),source,key.get());
-      c.write(new Text(e.date()),e);
+      c.write(new Text(e.partitionDate()),e);
       c.getCounter("BEHAVIOR","accepted_rows").increment(1);
       c.getCounter("BEHAVIOR",e.scoped()?"in_scope_rows":"outside_rows").increment(1);
       if(e.scoped()){c.getCounter("BEHAVIOR","type_"+Event.TYPES[e.type]).increment(1);c.getCounter("DAILY",e.date()).increment(1);}

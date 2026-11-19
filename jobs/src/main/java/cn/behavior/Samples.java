@@ -10,6 +10,8 @@ import org.apache.hadoop.mapreduce.*;
 
 public final class Samples {
   private static final ObjectMapper JSON=new ObjectMapper();
+  private static final long[] WINDOWS={3600L,86400L,172800L};
+  private static final ThreadLocal<MessageDigest> SHA256=ThreadLocal.withInitial(()->{try{return MessageDigest.getInstance("SHA-256");}catch(NoSuchAlgorithmException e){throw new IllegalStateException(e);}});
   public static final int[] DAYS={2,3,4,5,6,7,9};
   public static final String[] SPLITS={"TRAIN","TRAIN","TRAIN","TRAIN","VALIDATION","TEST","FORECAST"};
   static final class State {
@@ -19,7 +21,7 @@ public final class Samples {
     void accept(Event e){
       if(e.ts>=anchor-172800&&e.ts<anchor){
         history=Math.addExact(history,1);last=e.ts;activeHours|=1L<<((e.ts-(anchor-172800))/3600);
-        for(int j=0;j<3;j++)if(e.ts>=anchor-new long[]{3600,86400,172800}[j])counts[j*4+e.type]=Math.addExact(counts[j*4+e.type],1);
+        for(int j=0;j<3;j++)if(e.ts>=anchor-WINDOWS[j])counts[j*4+e.type]=Math.addExact(counts[j*4+e.type],1);
         if(sequence.size()==128)sequence.removeFirst();sequence.addLast(new Event(e));
       }
       if(e.ts>=anchor&&e.ts<anchor+86400&&e.type==1)label=true;
@@ -33,7 +35,7 @@ public final class Samples {
       return n;
     }
   }
-  public static String hex(String s){try{byte[] b=MessageDigest.getInstance("SHA-256").digest(s.getBytes(StandardCharsets.UTF_8));StringBuilder out=new StringBuilder();for(byte v:b){out.append(Character.forDigit((v>>>4)&15,16));out.append(Character.forDigit(v&15,16));}return out.toString();}catch(NoSuchAlgorithmException e){throw new IllegalStateException(e);}}
+  public static String hex(String s){MessageDigest md=SHA256.get();md.reset();byte[] b=md.digest(s.getBytes(StandardCharsets.UTF_8));StringBuilder out=new StringBuilder(b.length*2);for(byte v:b){out.append(Character.forDigit((v>>>4)&15,16));out.append(Character.forDigit(v&15,16));}return out.toString();}
   public static class Reduce extends Reducer<SortKey,Event,Text,Text>{
     protected void reduce(SortKey key,Iterable<Event> values,Context c)throws IOException,InterruptedException{
       State[] states=new State[7];for(int i=0;i<7;i++)states[i]=new State(Event.START+DAYS[i]*86400L);

@@ -14,7 +14,8 @@ import org.apache.hadoop.util.*;
 public final class Files extends Configured implements Tool {
   private static final ObjectMapper JSON=new ObjectMapper();
   public int run(String[] args)throws Exception{
-    Configuration c=getConf();FileSystem fs=new Path(args[1]).getFileSystem(c);
+    if(args.length<1)throw new IllegalArgumentException("inspect|dump path");
+    Configuration c=getConf();
     if(args[0].equals("dump")){
       java.util.List<String> inputs=new java.util.ArrayList<>();
       try(BufferedReader paths=new BufferedReader(new InputStreamReader(System.in,StandardCharsets.UTF_8))){String path;while((path=paths.readLine())!=null)inputs.add(path);}
@@ -23,12 +24,21 @@ public final class Files extends Configured implements Tool {
       output.flush();
       return 0;
     }
-    if(!args[0].equals("inspect"))throw new IllegalArgumentException("inspect|dump path");
+    if(!args[0].equals("inspect")||args.length<2)throw new IllegalArgumentException("inspect|dump path");
+    FileSystem fs=new Path(args[1]).getFileSystem(c);
     RemoteIterator<LocatedFileStatus> it=fs.listFiles(new Path(args[1]),true);
     while(it.hasNext()){
       LocatedFileStatus f=it.next();String name=f.getPath().getName();if(name.startsWith("."))continue;
-      MessageDigest digest=MessageDigest.getInstance("SHA-256");long rows=0;boolean sequence=name.startsWith("part-")&&!f.getPath().toString().contains("/rejected/");String keyClass=null,valueClass=null;
-      try(InputStream in=fs.open(f.getPath())){byte[] b=new byte[1024*1024];int n;while((n=in.read(b))!=-1)digest.update(b,0,n);}
+      MessageDigest digest=MessageDigest.getInstance("SHA-256");long rows=0;String keyClass=null,valueClass=null;
+      byte[] header=new byte[3];int headerLen=0;
+      try(InputStream in=fs.open(f.getPath())){
+        byte[] b=new byte[1024*1024];int n;
+        while((n=in.read(b))!=-1){
+          if(headerLen<3){int copy=Math.min(3-headerLen,n);System.arraycopy(b,0,header,headerLen,copy);headerLen+=copy;}
+          digest.update(b,0,n);
+        }
+      }
+      boolean sequence=!f.getPath().toString().contains("/rejected/")&&headerLen==3&&header[0]=='S'&&header[1]=='E'&&header[2]=='Q';
       if(sequence){
         try(SequenceFile.Reader r=new SequenceFile.Reader(c,SequenceFile.Reader.file(f.getPath()))){
           keyClass=r.getKeyClassName();valueClass=r.getValueClassName();Writable k=(Writable)ReflectionUtils.newInstance(r.getKeyClass(),c),v=(Writable)ReflectionUtils.newInstance(r.getValueClass(),c);while(r.next(k,v))rows++;

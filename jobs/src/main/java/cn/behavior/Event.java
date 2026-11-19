@@ -24,7 +24,9 @@ public final class Event implements Writable {
   public boolean scoped(){return ts>=START&&ts<END;}
   public int day(){return (int)((ts-START)/86400);}
   public String date(){if(scoped())return DATES[day()];return Instant.ofEpochSecond(ts).atZone(ZONE).toLocalDate().toString();}
+  public String partitionDate(){return scoped()?DATES[day()]:"outside";}
   public int hour(){if(scoped())return (int)((ts-START)%86400)/3600;return Instant.ofEpochSecond(ts).atZone(ZONE).getHour();}
+  private static int typeIndex(String s){switch(s){case "pv":return 0;case "buy":return 1;case "cart":return 2;case "fav":return 3;default:return -1;}}
   public static final class Invalid extends Exception {
     public final String reason;
     Invalid(String reason){super(reason);this.reason=reason;}
@@ -37,7 +39,7 @@ public final class Event implements Writable {
     String[] f=line.split(",",-1);
     if(f.length!=5)throw new Invalid("BAD_FIELD_COUNT");
     for(int i=0;i<3;i++)if(!ID.matcher(f[i]).matches())throw new Invalid("BAD_ID");
-    int t=Arrays.asList(TYPES).indexOf(f[3]);
+    int t=typeIndex(f[3]);
     if(t<0)throw new Invalid("BAD_BEHAVIOR");
     long ts;
     try {
