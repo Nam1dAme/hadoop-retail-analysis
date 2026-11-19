@@ -59,12 +59,21 @@ class Lease:
             q.execute('SELECT generation FROM resource_lease WHERE singleton_id=1')
             if q.fetchone()['generation']!=self.generation:raise LockBusy('Lease fenced')
     def __exit__(self,*exc):
-        self.stop.set();self.worker.join(timeout=35)
+        self.stop.set()
+        if getattr(self,'worker',None) is not None:self.worker.join(timeout=35)
+        db=getattr(self,'db',None)
+        if db is None:return
         try:
-            with self.db.cursor() as q:
-                q.execute('UPDATE resource_lease SET owner_run_id=NULL,updated_at=%s WHERE singleton_id=1 AND generation=%s',(now(),self.generation))
-                q.execute('SELECT RELEASE_LOCK(%s)',(LOCK,))
-        finally:self.db.close()
+            if getattr(db,'open',True):
+                with db.cursor() as q:
+                    q.execute('UPDATE resource_lease SET owner_run_id=NULL,updated_at=%s WHERE singleton_id=1 AND generation=%s',(now(),self.generation))
+                    q.execute('SELECT RELEASE_LOCK(%s)',(LOCK,))
+        except Exception:
+            if not exc[0]:raise
+        finally:
+            if getattr(db,'open',True):
+                try:db.close()
+                except Exception:pass
 
 def alive(row):
     return row['pid'] is not None and process_start(row['pid'])==row['process_started_at']

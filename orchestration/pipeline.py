@@ -28,9 +28,15 @@ def latest(db,batch,stage):
         q.execute("SELECT * FROM task_run WHERE batch_id=%s AND stage=%s AND status='SUCCEEDED' ORDER BY finished_at DESC LIMIT 1",(batch,stage));return q.fetchone()
 
 
+def environment_fingerprint():
+    data=json.loads((ROOT/'config/environment.lock.json').read_text())
+    stable={k:data[k] for k in ('baseline','java','hadoop','python','packages','database','uv_lock_sha256','toolchain_lock_sha256','config_hashes') if k in data}
+    return fingerprint(stable)
+
+
 def stage_run(lease,batch,stage,inputs,parameters,executor=None):
     lease.guard();db=lease.db;storage=Hdfs(lease.config,lease)
-    env_hash=sha(ROOT/'config/environment.lock.json');code=commit()
+    env_hash=environment_fingerprint();code=commit()
     implementation=implementation_fingerprint()
     previous_implementation=getattr(lease,'implementation',implementation)
     if previous_implementation!=implementation:raise ConfigError('Runtime source changed during pipeline; resume from committed code')

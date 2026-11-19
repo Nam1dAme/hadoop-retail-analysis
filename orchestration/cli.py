@@ -5,7 +5,7 @@ from pathlib import Path
 import subprocess
 import sys
 from .common import *
-from .database import connect,migrate,require_current,backup as database_backup
+from .database import connect,migrate,pending_migrations,require_current,backup as database_backup
 from .control import Lease
 from .pipeline import pipeline,STAGES
 from .samples import prepare
@@ -16,10 +16,10 @@ def parser():
     p.add_argument('--config',default=str(ROOT/'config/development.toml'));p.add_argument('--baseline',required=True)
     p.add_argument('--credentials',default=str(ROOT/'var/secrets/writer.cnf'));p.add_argument('--dry-run',action='store_true')
     sub=p.add_subparsers(dest='command',required=True)
-    sub.add_parser('migrate')
+    m=sub.add_parser('migrate');m.add_argument('--backup',action='store_true')
     i=sub.add_parser('ingest');i.add_argument('--source');i.add_argument('--source-url')
     for name in ('profile','pipeline','resume'):
-        q=sub.add_parser(name);q.add_argument('--batch-id',required=True);q.add_argument('--reducers',type=int,default=2);q.add_argument('--through',choices=STAGES,default='J04summary' if name!='profile' else 'J02');q.add_argument('--audit',action='store_true');q.add_argument('--split-bytes',type=int)
+        q=sub.add_parser(name);q.add_argument('--batch-id',required=True);q.add_argument('--reducers',type=int,default=2);q.add_argument('--through',choices=STAGES,default='J02' if name=='profile' else STAGES[-1] if name=='resume' else 'J04summary');q.add_argument('--audit',action='store_true');q.add_argument('--split-bytes',type=int)
     for name in ('prepare-samples','status'):
         q=sub.add_parser(name);q.add_argument('--batch-id',required=True)
     return p
@@ -53,8 +53,10 @@ def execute(args):
     if args.command=='migrate':
         def apply(db,guard=lambda:None):
             guard()
-            backup=work/'backups'/('pre-migration-'+stamp().replace(':','')+'.sql');backup.parent.mkdir(parents=True,exist_ok=True)
-            database_backup(c,args.credentials,backup);guard()
+            pending=pending_migrations(db)
+            if args.backup or pending:
+                backup=work/'backups'/('pre-migration-'+stamp().replace(':','')+'.sql.gz');backup.parent.mkdir(parents=True,exist_ok=True)
+                database_backup(c,args.credentials,backup);guard()
             # A populated-table index build is offline maintenance, not a five-second read API.
             db._read_timeout=900
             with db.cursor() as q:q.execute('SET SESSION max_statement_time=840')
@@ -95,8 +97,8 @@ def main():
     except PipelineError as e:
         print(encode({'status':'FAILED','error_code':e.code,'message':str(e)}));return e.exit_code
     except (OSError,subprocess.CalledProcessError) as e:
-        print(encode({'status':'FAILED','error_code':'DEPENDENCY_UNAVAILABLE','message':type(e).__name__}));return 3
+        print(encode({'status':'FAILED','error_code':'DEPENDENCY_UNAVAILABLE','message':f'{type(e).__name__}: {e}'}));return 3
     except Exception as e:
-        print(encode({'status':'FAILED','error_code':'UNEXPECTED_ERROR','message':type(e).__name__}));return 5
+        print(encode({'status':'FAILED','error_code':'UNEXPECTED_ERROR','message':f'{type(e).__name__}: {e}'}));return 5
     print(encode(result));return 0
 if __name__=='__main__':sys.exit(main())

@@ -9,17 +9,24 @@ import time
 import urllib.request
 import urllib.error
 from .common import ROOT,runtime_env,PipelineError,ManifestError,LockBusy,encode
+from .webhdfs import WebHdfs
 
 JAR=ROOT/'jobs/target/behavior-jobs.jar'
 class Hdfs:
-    def __init__(self,config,lease=None):self.config=config;self.lease=lease;self.env=runtime_env()
+    def __init__(self,config,lease=None):self.config=config;self.lease=lease;self.env=runtime_env();self.webhdfs=WebHdfs.from_config(config)
     def command(self,*args,check=True):
         if self.lease:self.lease.guard()
         p=subprocess.run(['hdfs','dfs','-fs',self.config['hdfs']['uri'],*map(str,args)],env=self.env,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
         if check and p.returncode:raise PipelineError('HDFS command failed: '+p.stderr.decode(errors='replace')[-1200:])
         return p
-    def exists(self,p):return self.command('-test','-e',p,check=False).returncode==0
-    def json(self,p):return json.loads(self.command('-cat',p).stdout)
+    def exists(self,p):
+        if self.lease:self.lease.guard()
+        try:return self.webhdfs.exists(p)
+        except (urllib.error.URLError,OSError):return self.command('-test','-e',p,check=False).returncode==0
+    def json(self,p):
+        if self.lease:self.lease.guard()
+        try:return json.loads(self.webhdfs.read_bytes(p))
+        except (urllib.error.URLError,OSError):return json.loads(self.command('-cat',p).stdout)
     def mkdir(self,p):self.command('-mkdir','-p',p)
     def put(self,local,remote):self.command('-put',local,remote)
     def rename(self,src,dst):
@@ -55,7 +62,10 @@ class Hdfs:
                 if p.wait()!=0:raise PipelineError('SequenceFile dump failed, see dump-errors.log')
             finally:
                 p.stdout.close()
-                if p.poll() is None:p.terminate();p.wait(timeout=10)
+                if p.poll() is None:
+                    p.terminate()
+                    try:p.wait(timeout=10)
+                    except subprocess.TimeoutExpired:p.kill();p.wait()
 
 def application(config,app_id):
     base=config.get('yarn',{}).get('api','http://127.0.0.1:18088')

@@ -36,7 +36,10 @@ def load(path):
     if not re.fullmatch('[A-Za-z_][A-Za-z0-9_]{0,63}',c['database']['name']):raise ConfigError('Invalid database name')
     root=c['hdfs']['root']
     if not root.startswith('/') or any(x in root for x in ('..',',','\n')):raise ConfigError('Unsafe HDFS namespace')
-    work=Path(c.get('paths',{}).get('work_dir',ROOT/'var/production')).resolve()
+    raw_work=c.get('paths',{}).get('work_dir')
+    work=Path(raw_work) if raw_work else (ROOT/'var/production')
+    if not work.is_absolute():work=ROOT/work
+    work=work.resolve()
     if not work.is_relative_to(ROOT/'var'):raise ConfigError('work_dir must be inside project var')
     c['paths']={'work_dir':str(work)}
     if (c.get('synthetic',False) or c.get('benchmark',False)) and (c['database']['name']=='behavior_analytics' or root=='/behavior/v1' or work==ROOT/'var/production'):
