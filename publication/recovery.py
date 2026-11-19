@@ -20,7 +20,7 @@ from service.api import create_app
 from service.database import Pool
 
 
-def restore(lease,backup_manifest=None):
+def restore(lease,backup_manifest=None,keep_on_failure=False):
     started=time.monotonic()
     atomic_json(ROOT/'var/production/recovery.json',dict(status='RUNNING',started_at=stamp(),independent_backup_verified=False))
     report=json.loads(Path(backup_manifest or ROOT/'var/production/backup.json').read_text())
@@ -35,7 +35,7 @@ def restore(lease,backup_manifest=None):
     expected={x['path']:x for x in report['hdfs_files']};seen=set();storage=Hdfs(lease.config,lease);web=WebHdfs()
     counts=report['table_counts']
     if any(not table.replace('_','').isalnum() for table in counts):raise ManifestError('Unexpected backup table identifier')
-    sql=directory/'database.sql';hdfs_bytes=0;server=None
+    sql=directory/'database.sql';hdfs_bytes=0;server=None;succeeded=False
     try:
         with tarfile.open(archive,mode='r|gz') as tar:
             for member in tar:
@@ -112,15 +112,21 @@ def restore(lease,backup_manifest=None):
                     restored_hdfs_root=remote,verified_hdfs_files=len(seen),verified_hdfs_bytes=hdfs_bytes,
                     table_counts=actual,api_comparisons=comparisons,production_current_unchanged=original_current,rto_seconds=duration,verified_at=stamp())
         atomic_json(ROOT/'var/production/recovery.json',result)
+        succeeded=True
         return result
     finally:
         if server is not None and server.poll() is None:
             try:
                 with pymysql.connect(unix_socket=str(socket),user=getpass.getuser(),autocommit=True) as admin,admin.cursor() as q:q.execute('SHUTDOWN')
-            finally:server.wait(timeout=30)
-        if (ROOT/'var/production/recovery.json').exists():
-            result=json.loads((ROOT/'var/production/recovery.json').read_text())
-            if result.get('restored_hdfs_root')==remote and result.get('status')=='PASS':
-                # Only the uniquely owned, fully verified disposable restoration is removed.
+            except Exception:
+                server.terminate()
+            finally:
+                try:server.wait(timeout=30)
+                except Exception:server.kill();server.wait(timeout=10)
+        if succeeded or not keep_on_failure:
+            try:
                 storage.command('-rm','-r','-skipTrash',remote)
-                shutil.rmtree(directory)
+            except Exception:
+                pass
+            if directory.exists():
+                shutil.rmtree(directory,ignore_errors=True)
