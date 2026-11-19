@@ -1,6 +1,10 @@
 baseline_version = "UBA-DOC-1.0.0"
 [source]
 path = "/home/hadoop/hadoop-retail-analysis/var/data/UserBehavior.csv"
+[dataset]
+start_date = "2017-11-25"
+end_date = "2017-12-03"
+timezone = "Asia/Shanghai"
 [database]
 host = "127.0.0.1"
 port = 3307
@@ -8,6 +12,14 @@ name = "behavior_analytics"
 [hdfs]
 uri = "hdfs://127.0.0.1:19000"
 root = "/behavior/v1"
+webhdfs_base = "http://127.0.0.1:19870"
+webhdfs_host = "127.0.0.1"
+webhdfs_port = 19864
+webhdfs_user = "hadoop"
+[yarn]
+api = "http://127.0.0.1:18088"
+[paths]
+work_dir = "var/production"
 [api]
 host = "127.0.0.1"
 port = 8010

@@ -36,4 +36,8 @@
     <name>dfs.namenode.rpc-bind-host</name>
     <value>127.0.0.1</value>
   </property>
+  <property>
+    <name>dfs.datanode.hostname</name>
+    <value>127.0.0.1</value>
+  </property>
 </configuration>
