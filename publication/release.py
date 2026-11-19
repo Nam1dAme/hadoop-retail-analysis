@@ -10,9 +10,14 @@ import numpy as np
 from orchestration.common import ROOT,atomic_json,sha,fingerprint,encode,now,stamp,ManifestError,PipelineError
 from orchestration.pipeline import latest,files,validate
 from orchestration.storage import Hdfs,application
+from ml.shards import shard_sample_keys
 from .validation import prepare_offline_checks
 
 TABLE_WIDTHS={'event_cube':5,'entity_daily':6,'user_daily':10,'range_summary':7,'activity_daily':5,'prediction':11}
+
+
+def _estimate_row_bytes(row):
+    return sum(len(x.encode('utf-8')) if isinstance(x,str) else 16 for x in row)+16
 
 
 def load_rows(lease,release_id,dataset,table,source_hash,rows):
@@ -36,7 +41,7 @@ def load_rows(lease,release_id,dataset,table,source_hash,rows):
         if not batch:break
         if any(len(row)!=TABLE_WIDTHS[table] or row[0]!=release_id for row in batch):
             raise ManifestError('Result row identity/shape differs')
-        if sum(len(encode(row).encode()) for row in batch)>8*1024**2:
+        if sum(_estimate_row_bytes(row) for row in batch)>8*1024**2:
             raise ManifestError('Result transaction exceeds 8 MiB')
         lease.db.begin()
         try:
@@ -64,7 +69,8 @@ def prediction_rows(release_id,mode,model_id,path,cache,threshold,lease):
     manifest=json.loads((cache/'manifest.json').read_text());offset=0
     for shard in manifest['shards']:
         lease.guard();directory=cache/shard['directory'];n=shard['rows']
-        columns={k:np.load(directory/(k+'.npy'),mmap_mode='r',allow_pickle=False) for k in ('sample_key','as_of','history_event_count','label')}
+        columns={k:np.load(directory/(k+'.npy'),mmap_mode='r',allow_pickle=False) for k in ('as_of','history_event_count','label')}
+        columns['sample_key']=shard_sample_keys(directory)
         ids=(directory/'user_ids.utf8').read_bytes();positions=np.load(directory/'user_offsets.npy',mmap_mode='r',allow_pickle=False)
         for i in range(n):
             value=predictions[offset+i]
@@ -163,9 +169,15 @@ def publish(lease):
         if not release:
             release_id=str(uuid.uuid4())
             remote=f'{lease.config["hdfs"]["root"]}/releases/{release_id}/manifest.json'
+            fc_info=forecast.get('forecast',{})
+            rel_cfg=lease.config.get('release',{})
+            raw_as_of=rel_cfg.get('as_of') or fc_info.get('as_of') or '2017-12-03T16:00:00Z'
+            raw_window_end=rel_cfg.get('window_end') or fc_info.get('window_end') or '2017-12-04T16:00:00Z'
+            sql_as_of=raw_as_of.replace('T',' ').rstrip('Z')
+            sql_window_end=raw_window_end.replace('T',' ').rstrip('Z')
             q.execute('INSERT INTO data_release VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,NULL)',
                       (release_id,batch,models['experiment_id'],models['selected_model_id'],'STAGING',remote,manifest_hash,encode(manifest),
-                       '2017-12-03 16:00:00','2017-12-04 16:00:00',now()))
+                       sql_as_of,sql_window_end,now()))
         else:release_id=release['release_id'];remote=release['manifest_path']
         q.execute('SELECT generation FROM current_release WHERE singleton_id=1');generation=q.fetchone()['generation']
     started=time.monotonic();counts={}
