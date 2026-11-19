@@ -5,6 +5,22 @@ import tempfile
 import numpy as np
 
 SCORE_DTYPE = np.dtype([('score', '<f8'), ('label', 'i1'), ('cohort', 'u1'), ('sample_key', 'S64')])
+IN_MEMORY_LIMIT = 2_000_000
+
+
+def _fast_ap_auc(p, y, positive, negative):
+    order = np.argsort(-p, kind='stable')
+    p_sorted = p[order]
+    y_sorted = y[order].astype(np.int64)
+    boundaries = np.r_[0, np.flatnonzero(p_sorted[1:] != p_sorted[:-1]) + 1]
+    counts = np.diff(np.r_[boundaries, len(p_sorted)])
+    pos = np.add.reduceat(y_sorted, boundaries)
+    neg = counts - pos
+    tp = np.cumsum(pos)
+    fp = np.cumsum(neg)
+    ap = float(np.sum((pos / positive) * (tp / (tp + fp)))) if positive else 0.
+    auc_pairs = float(np.sum(pos * (negative - fp + .5 * neg)))
+    return ap, auc_pairs
 
 
 def descending_groups(scores, labels, directory, chunk_size=65536):
@@ -52,14 +68,17 @@ def metrics(scores, labels, threshold=.5, directory=None, chunk_size=65536):
     if n == 0:
         return dict(sample_count=0, positive_count=0, reason='EMPTY_COHORT', ap=None, roc_auc=None,
                     logloss=None, brier=None, precision=None, recall=None, f1=None, calibration=[])
-    tp = fp = 0
-    ap = auc_pairs = 0.
-    for _, pos, neg in descending_groups(p, y, directory, chunk_size):
-        tp += pos
-        fp += neg
-        if positive:
-            ap += pos / positive * tp / (tp + fp)
-        auc_pairs += pos * (negative - fp + .5 * neg)
+    if n <= IN_MEMORY_LIMIT:
+        ap, auc_pairs = _fast_ap_auc(p, y, positive, negative)
+    else:
+        tp = fp = 0
+        ap = auc_pairs = 0.
+        for _, pos, neg in descending_groups(p, y, directory, chunk_size):
+            tp += pos
+            fp += neg
+            if positive:
+                ap += pos / positive * tp / (tp + fp)
+            auc_pairs += pos * (negative - fp + .5 * neg)
     selected = p >= threshold
     tp = int(np.count_nonzero(selected & (y == 1)))
     fp = int(np.count_nonzero(selected & (y == 0)))

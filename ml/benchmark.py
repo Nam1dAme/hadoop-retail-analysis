@@ -9,15 +9,16 @@ import torch
 from torch.nn import functional as F
 from orchestration.common import atomic_json, fingerprint, encode
 from .models import make_model, seed_all, tensors, FEATURES
+from .shards import shard_sample_keys
 from .training import hardware, resource_usage, resource_guard
 
 
 class ComparableDropout(torch.nn.Module):
-    """Use the same CPU-generated masks on both devices for the FP32 comparison."""
+    """Generate dropout masks directly on the tensor's device for FP32 comparison."""
     def forward(self, values):
         if not self.training:
             return values
-        mask = (torch.rand(values.shape, device='cpu') >= .1).to(values.device)
+        mask = torch.rand(values.shape, device=values.device) >= .1
         return values * mask / .9
 
 
@@ -25,7 +26,7 @@ def select_sample(train, output, limit=65536):
     index = np.empty(0, dtype=[('key', 'S64'), ('shard', '<i4'), ('row', '<i4')])
     for number, shard in enumerate(train.manifest['shards']):
         p = train.path/shard['directory']
-        keys = np.load(p/'sample_key.npy', mmap_mode='r', allow_pickle=False)
+        keys = shard_sample_keys(p)
         added = np.empty(len(keys), dtype=index.dtype)
         added['key'], added['shard'], added['row'] = keys, number, np.arange(len(keys))
         combined = np.concatenate((index, added))
@@ -60,7 +61,7 @@ def run_benchmark(lease, train, experiment, directory):
     preload_seconds = time.monotonic()-sample_started
     count = len(sample['label'])
     configuration = dict(batch=64, warmup_steps=20, steps=200, repeats=3, precision='FP32',
-                         tf32=False, cpu_threads=4, dropout='same CPU RNG mask on both devices')
+                         tf32=False, cpu_threads=4, dropout='device-local RNG mask')
     records, first_losses = [], {}
     for name in ('cpu', 'cuda'):
         device = torch.device(name)

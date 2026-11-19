@@ -43,11 +43,18 @@ class BehaviorGRU(nn.Module):
         self.head = nn.Sequential(nn.Linear(78, 32), nn.ReLU(), nn.Dropout(.1), nn.Linear(32, 1))
 
     def forward(self, batch):
-        sequence = torch.cat((self.category(batch['category']), self.behavior(batch['behavior']),
-                              self.hour(batch['hour']), batch['gap'].unsqueeze(-1)), dim=-1)
-        hidden, _ = self.gru(self.project(sequence))
-        # The unidirectional hidden at the last real event is independent of later PADs.
-        last = hidden[torch.arange(len(hidden), device=hidden.device), batch['length'] - 1]
+        max_len = int(batch['length'].max().item())
+        sequence = torch.cat((self.category(batch['category'][:, :max_len]),
+                              self.behavior(batch['behavior'][:, :max_len]),
+                              self.hour(batch['hour'][:, :max_len]),
+                              batch['gap'][:, :max_len].unsqueeze(-1)), dim=-1)
+        projected = self.project(sequence)
+        packed = nn.utils.rnn.pack_padded_sequence(
+            projected, batch['length'].cpu(), batch_first=True, enforce_sorted=False
+        )
+        # Packed GRU stops at each sample's true length, so final hidden state ignores all PADs.
+        _, hidden = self.gru(packed)
+        last = hidden.squeeze(0)
         return self.head(torch.cat((last, batch['numeric']), dim=-1)).squeeze(-1)
 
 

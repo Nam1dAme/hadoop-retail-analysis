@@ -4,7 +4,25 @@ import json
 import numpy as np
 from orchestration.common import atomic_json,ManifestError,sha,fingerprint
 
-SPECS={'sample_key':('S64',()),'as_of':('<i8',()),'length':('u1',()),'category':('<i4',(128,)),'behavior':('u1',(128,)),'hour':('u1',(128,)),'gap':('<f4',(128,)),'numeric':('<f4',(14,)),'label':('i1',()),'history_event_count':('<i8',()),'cohort':('u1',())}
+SPECS={'as_of':('<i8',()),'length':('u1',()),'category':('<u2',(128,)),'behavior':('u1',(128,)),'hour':('u1',(128,)),'gap':('<f4',(128,)),'numeric':('<f4',(14,)),'label':('i1',()),'history_event_count':('<i8',()),'cohort':('u1',())}
+
+def _compute_sample_keys(shard_dir,indices,as_of_arr):
+    offsets=np.load(shard_dir/'user_offsets.npy',mmap_mode='r',allow_pickle=False)
+    raw=(shard_dir/'user_ids.utf8').read_bytes()
+    out=np.empty(len(indices),dtype='S64')
+    for j,idx in enumerate(indices):
+        i=int(idx)
+        user=raw[int(offsets[i]):int(offsets[i+1])]
+        out[j]=hashlib.sha256(user+b'|'+str(int(as_of_arr[i])).encode()).hexdigest().encode()
+    return out
+
+def shard_sample_keys(shard_dir):
+    p=Path(shard_dir)
+    key_path=p/'sample_key.npy'
+    if key_path.exists():
+        return np.load(key_path,mmap_mode='r',allow_pickle=False)
+    as_of=np.load(p/'as_of.npy',mmap_mode='r',allow_pickle=False)
+    return _compute_sample_keys(p,np.arange(len(as_of)),as_of)
 class ShardWriter:
     def __init__(self,path,mean,std,capacity=32768):
         if not 1<=capacity<=32768:raise ValueError('shard capacity out of range')
@@ -23,7 +41,8 @@ class ShardWriter:
             else:v=row[k]
             self.buffers[k][n]=v
         raw=row['user_id'].encode();self.ids.write(raw);self.offsets[n+1]=self.offsets[n]+len(raw)
-        self.identities.update((row['sample_key']+'\n').encode());self.count+=1;self.positives+=row['label']==1;self.zeros+=row['label']==0;self.seen+=row['cohort']=='SEEN_TRAIN';self.index+=1
+        key=row.get('sample_key') or hashlib.sha256(raw+b'|'+str(int(row['as_of'])).encode()).hexdigest()
+        self.identities.update((key+'\n').encode());self.count+=1;self.positives+=row['label']==1;self.zeros+=row['label']==0;self.seen+=row['cohort']=='SEEN_TRAIN';self.index+=1
         if self.index==self.capacity:self._close()
     def _close(self):
         n=self.index;self.ids.close()
@@ -61,7 +80,11 @@ class ShardDataset:
                 if not 1<=n<=32768:raise ManifestError('Invalid shard rows')
                 arrays={k:np.load(p/(k+'.npy'),mmap_mode='r',allow_pickle=False) for k in SPECS}
                 for k,(dtype,shape) in SPECS.items():
-                    if arrays[k].shape!=(n,*shape) or arrays[k].dtype!=np.dtype(dtype):raise ManifestError('Shard shape/dtype mismatch: '+k)
+                    valid_dtypes=(np.dtype('<u2'),np.dtype('<i4')) if k=='category' else (np.dtype(dtype),)
+                    if arrays[k].shape!=(n,*shape) or arrays[k].dtype not in valid_dtypes:raise ManifestError('Shard shape/dtype mismatch: '+k)
+                legacy_key_path=p/'sample_key.npy'
+                legacy_keys=np.load(legacy_key_path,mmap_mode='r',allow_pickle=False) if legacy_key_path.exists() else None
+                if legacy_keys is not None and (legacy_keys.shape!=(n,) or legacy_keys.dtype!=np.dtype('S64')):raise ManifestError('Shard shape/dtype mismatch: sample_key')
                 lengths=arrays['length']
                 if np.any((lengths<1)|(lengths>128)):raise ManifestError('Invalid sequence lengths')
                 padding=np.arange(128)[None,:]>=lengths[:,None]
@@ -80,20 +103,33 @@ class ShardDataset:
                 for i in range(n):
                     user=raw[offsets[i]:offsets[i+1]]
                     if not 1<=len(user)<=20 or not user.isdigit():raise ManifestError('Invalid source user ID')
-                    expected=hashlib.sha256(user+b'|'+str(int(arrays['as_of'][i])).encode()).hexdigest().encode()
-                    if bytes(arrays['sample_key'][i])!=expected:raise ManifestError('Sample key does not match source user and anchor')
+                    if legacy_keys is not None:
+                        expected=hashlib.sha256(user+b'|'+str(int(arrays['as_of'][i])).encode()).hexdigest().encode()
+                        if bytes(legacy_keys[i])!=expected:raise ManifestError('Sample key does not match source user and anchor')
             if 'seen_count' in self.manifest and (seen,count-seen)!=(self.manifest['seen_count'],self.manifest['unseen_count']):raise ManifestError('Cohort counts differ')
             if (count,positive,negative)!=(self.manifest['rows'],self.manifest['positive_count'],self.manifest['negative_count']):raise ManifestError('Shard population differs')
     def batches(self,batch_size=256,seed=42,epoch=0,shuffle=True,columns=None):
         if batch_size<1:raise ValueError('batch_size must be positive')
         rng=np.random.default_rng(seed+epoch);shards=list(self.manifest['shards'])
         if shuffle:rng.shuffle(shards)
+        cols=(*SPECS,'sample_key') if columns is None else tuple(columns)
+        need_key='sample_key' in cols
+        npy_cols=[k for k in cols if k!='sample_key']
         for shard in shards:
-            p=self.path/shard['directory'];arrays={k:np.load(p/(k+'.npy'),mmap_mode='r',allow_pickle=False) for k in (SPECS if columns is None else columns)}
+            p=self.path/shard['directory']
+            arrays={k:np.load(p/(k+'.npy'),mmap_mode='r',allow_pickle=False) for k in npy_cols}
+            key_path=p/'sample_key.npy'
+            has_legacy_key=need_key and key_path.exists()
+            if has_legacy_key:
+                arrays['sample_key']=np.load(key_path,mmap_mode='r',allow_pickle=False)
+            as_of_arr=arrays['as_of'] if 'as_of' in arrays else (np.load(p/'as_of.npy',mmap_mode='r',allow_pickle=False) if need_key and not has_legacy_key else None)
             order=rng.permutation(shard['rows']) if shuffle else np.arange(shard['rows'])
             for start in range(0,len(order),batch_size):
                 indices=order[start:start+batch_size]
-                yield {k:np.array(a[indices],copy=True) for k,a in arrays.items()}
+                batch={k:np.array(a[indices],copy=True) for k,a in arrays.items()}
+                if need_key and not has_legacy_key:
+                    batch['sample_key']=_compute_sample_keys(p,indices,as_of_arr)
+                yield batch
 
 def training_groups(dataset,micro_batch=256,effective_batch=512,seed=42,epoch=0,columns=None):
     """跨分片累计到有效batch；返回按真实样本数归一的每个microbatch权重。"""

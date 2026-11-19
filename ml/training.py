@@ -107,7 +107,7 @@ def record_metrics(db, model_id, split, result, evaluation_hash):
 def preflight(train, algorithm, device):
     if algorithm == 'GRU' and device.type != 'cuda':
         raise PipelineError('Formal GRU training requires CUDA')
-    candidates = (256, 128, 64, 32) if device.type == 'cuda' else (256,)
+    candidates = (1024, 512, 256, 128, 64, 32) if device.type == 'cuda' else (256,)
     evidence = []
     for micro in candidates:
         model = optimizer = inputs = loss = None
@@ -151,10 +151,11 @@ def preflight(train, algorithm, device):
 def fit(lease, experiment, train, validation, algorithm, learning_rate, directory, sample_hash):
     device = torch.device('cuda' if algorithm == 'GRU' else 'cpu')
     micro, preflight_evidence = preflight(train, algorithm, device)
+    effective_batch = max(512, micro)
     identity = dict(schema_version='model-v1', algorithm=algorithm, learning_rate=learning_rate,
-                    weight_decay=1e-4, seed=42, effective_batch=512, micro_batch=micro,
+                    weight_decay=1e-4, seed=42, effective_batch=effective_batch, micro_batch=micro,
                     max_epochs=10, patience=2, selection='VALIDATION_AP', sample_hash=sample_hash,
-                    implementation=fingerprint({str(p.relative_to(ROOT)): sha(p) for p in sorted((ROOT/'ml').glob('*.py'))}))
+                    implementation=fingerprint({str(p.relative_to(ROOT)): sha(p) for p in sorted((ROOT/'ml').glob('*.py')) if p.name != 'benchmark.py'}))
     config_hash = fingerprint(identity)
     with lease.db.cursor() as q:
         q.execute('SELECT * FROM model_run WHERE experiment_id=%s AND algorithm=%s AND config_hash=%s',
@@ -223,7 +224,7 @@ def fit(lease, experiment, train, validation, algorithm, learning_rate, director
             loss_total = 0.
             skipped = 0
             columns = (*FEATURES, 'label') if algorithm == 'GRU' else ('numeric', 'label')
-            for index, (group, weights, count) in enumerate(training_groups(train, micro, 512, epoch=epoch, columns=columns)):
+            for index, (group, weights, count) in enumerate(training_groups(train, micro, effective_batch, epoch=epoch, columns=columns)):
                 resource_guard(device, lease)
                 optimizer.zero_grad(set_to_none=True)
                 for batch, weight in zip(group, weights):
@@ -296,6 +297,18 @@ def fit(lease, experiment, train, validation, algorithm, learning_rate, director
             except BaseException:
                 lease.db.rollback()
                 raise
+            # Clean up superseded epoch checkpoints only after the DB transaction commits.
+            for old in local.glob('epoch-*-resume.pt'):
+                if old != resume_path:
+                    old.unlink(missing_ok=True)
+            if improved:
+                val_path = local/f'epoch-{epoch:02}-validation.npy'
+                for old in local.glob('epoch-*-state.pt'):
+                    if old != best_path:
+                        old.unlink(missing_ok=True)
+                for old in local.glob('epoch-*-validation.npy'):
+                    if old != val_path:
+                        old.unlink(missing_ok=True)
             atomic_json(local/'history.json', history)
             print(encode(dict(model=model_id, **entry)), flush=True)
             if os.environ.get('BEHAVIOR_TEST_STOP_AFTER_EPOCH') == str(epoch):
@@ -312,6 +325,8 @@ def fit(lease, experiment, train, validation, algorithm, learning_rate, director
         atomic_json(local/'history.json', history)
         usage = resource_usage(device)
         record_metrics(lease.db, model_id, 'VALIDATION', values, sha(validation_path))
+        for old in local.glob('epoch-*-resume.pt'):
+            old.unlink(missing_ok=True)
         outputs = [dict(path=str(p.relative_to(local)), sha256=sha(p), bytes=p.stat().st_size)
                    for p in sorted(local.iterdir()) if p.is_file() and p.name not in ('manifest.json', 'progress.json')]
         result = dict(status='SUCCEEDED', model_run_id=model_id, experiment_id=experiment, algorithm=algorithm,
@@ -322,7 +337,7 @@ def fit(lease, experiment, train, validation, algorithm, learning_rate, director
                       training_seconds=elapsed_before+time.monotonic()-started, hardware=hw, outputs=outputs, **usage)
         atomic_json(local/'manifest.json', result)
         with lease.db.cursor() as q:
-            q.execute('UPDATE model_run SET status=%s,threshold=%s,training_seconds=%s,peak_allocated_mib=%s,peak_reserved_mib=%s,rss_mib=%s,updated_at=%s WHERE model_run_id=%s',
+            q.execute('UPDATE model_run SET status=%s,resume_path=NULL,resume_hash=NULL,threshold=%s,training_seconds=%s,peak_allocated_mib=%s,peak_reserved_mib=%s,rss_mib=%s,updated_at=%s WHERE model_run_id=%s',
                       ('SUCCEEDED', threshold, result['training_seconds'], usage['peak_allocated_mib'], usage['peak_reserved_mib'], usage['rss_mib'], now(), model_id))
         atomic_json(local/'progress.json', dict(status='SUCCEEDED', best_epoch=row['best_epoch'], updated_at=stamp()))
         return result
