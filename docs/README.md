@@ -1,32 +1,32 @@
-# 零售观察：Hadoop 电商用户行为分析与预测系统
+# 零售观察：设计与工程文档
 
-设计基线 **UBA-DOC-1.0.0**；2026-11-02；状态 **FROZEN（设计冻结，尚未实现或实测验收）**。
+本目录包含系统的架构设计、数据契约、接口规范与 Agent 交接文档（基线 `UBA-DOC-1.0.0`）。
 
-本套文档基于原项目结构重新设计，唯一真实业务数据为 `/mnt/e/UserBehavior/UserBehavior.csv`。采用 HDFS + YARN + Java MapReduce 进行全量处理，采用 PyTorch + CUDA 在用户提供的 RTX 4060 Laptop、8 GB 显存单卡上训练深度学习模型。模型预测历史活跃用户未来24小时是否出现购买行为，不是商品推荐、订单预测或收入预测。
+## Agent 任务交接（新接手必读）
 
-本次只交付文档；不创建代码、DDL、配置、数据副本或运行产物。冻结的含义是给后续开发明确契约，不表示用户已逐条审阅，不表示数据全量画像、GPU可访问性、性能或效果已经通过。
+- **[handoff/README.md](handoff/README.md)**：仓库结构、模块边界与核心约束
+- **[handoff/CURRENT-STATE.md](handoff/CURRENT-STATE.md)**：当前重构状态、关键不变量、已知坑点与禁动目录
+- **[handoff/PLAYBOOK.md](handoff/PLAYBOOK.md)**：构建、测试、服务启停命令与交接检查清单
 
-## 导航
+## 设计规范索引
 
 | 文件 | 内容 |
 |---|---|
-| [00](00-governance.md) | 治理、版本、冻结边界 |
+| [00](00-governance.md) | 全局约定与版本规则 |
 | [01](01-prd.md) | 需求、范围、指标及资源目标 |
 | [02](02-ux.md) | 七页工作台、交互与空态 |
 | [03](03-architecture.md) | 系统架构与组件职责 |
 | [04](04-data-contracts.md) | 数据、时间、质量与产物契约 |
-| [05](05-pipeline.md) | Hadoop作业、样本构建、任务状态 |
+| [05](05-pipeline.md) | Hadoop 作业、样本构建、任务状态 |
 | [06](06-database.md) | 逻辑表、字段、约束与索引 |
-| [07](07-models.md) | 预测目标、GRU、训练评价与CUDA |
-| [08](08-api.md) | 只读API协议 |
+| [07](07-models.md) | 预测目标、GRU、训练评价与 CUDA |
+| [08](08-api.md) | 只读 API 协议 |
 | [09](09-environment.md) | 单机部署、环境锁与容量预算 |
 | [10](10-operations.md) | 发布、恢复、安全及保留策略 |
 | [11](11-acceptance.md) | 自动化与真实环境验收 |
-| [12](12-agent-plan.md) | 实施阶段、模块边界和交付规则 |
+| [12](12-agent-plan.md) | 模块职责与交付边界 |
 | [13](13-decisions-risks.md) | ADR、迁移取舍及风险 |
 | [14](14-traceability.md) | 需求—设计—任务—测试映射 |
-| [15](15-evidence.md) | 已知事实、来源、未验证事项 |
-| [16](16-freeze-review.md) | 设计审查与完成边界 |
-| [清单](BASELINE-MANIFEST.md) | 文件SHA-256 |
-
-先读00、01、03、04、07、11、12，再读专项文档。Hadoop全量分析、深度学习、真实CUDA训练、批量预测和页面查询均为必须交付；只做统计页面或CPU模型不构成最终完成。
+| [15](15-evidence.md) | 数据来源与硬件参考边界 |
+| [16](16-freeze-review.md) | 基线审查摘要 |
+| [清单](BASELINE-MANIFEST.md) | 文件 SHA-256 清单 |

@@ -1,14 +1,12 @@
 # 09 环境、部署与单机容量
 
-UBA-DOC-1.0.0 / FROZEN。
+基线 `UBA-DOC-1.0.0`。
 
-## 目标与证据
+## 目标环境与依赖锁
 
-目标GPU为用户明确提供的RTX 4060 Laptop、8 GB显存、单GPU。当前工具环境可见约7.4 GiB RAM、32逻辑CPU，GPU此前访问被操作系统阻止；不能推导物理宿主只有8GB RAM，也不能推导CUDA必定不可用。实施时在普通WSL会话验证，不更改用户配置来伪装通过。
-
-Hadoop 3.4.2、Java 11、Python 3.12为选定兼容性验证起点；PyTorch使用官方支持CUDA的2.x构建，MariaDB 10.11系列、FastAPI、Streamlit。精确补丁和torch CUDA构建不捏造已安装状态：M0解析后形成environment.lock（包版本、wheel/发行包hash、Java/Hadoop、OS、驱动、CUDA runtime和cuDNN），通过兼容门禁才作为运行基线。依赖锁未形成前不得正式发布；更换已锁版本重跑相关环境与数值测试。URL文档版本不是环境实装版本。
-
-不要求系统Toolkit与torch运行库版本名称相同；若不编译自定义CUDA算子，可使用官方wheel所带运行依赖；Windows宿主驱动须支持对应运行库。WSL驱动机制参见[NVIDIA官方指南](https://docs.nvidia.com/cuda/wsl-user-guide/index.html)，不要在WSL误装覆盖宿主映射的Linux显示驱动。
+- 核心工具链：Hadoop 3.4.2、Java 11、Python 3.12（`uv.lock`）、PyTorch 2.x（CUDA 12.x）、MariaDB 10.11、FastAPI、Streamlit。
+- 实际依赖版本与硬件信息通过 `scripts/check-environment.py` 与 `scripts/freeze-environment.py` 写入 `config/environment.lock.json`，未通过环境门禁前不执行正式发布。
+- WSL2 下通过宿主 NVIDIA 驱动映射访问 CUDA（不要在 WSL 内安装覆盖宿主映射的 Linux 显示驱动），详见 [NVIDIA WSL 指南](https://docs.nvidia.com/cuda/wsl-user-guide/index.html)。
 
 ## 本机资源配置起点
 
@@ -38,7 +36,7 @@ Linux df显示879GiB、E盘89GiB不能相加；确认VHDX所在宿主卷实际�
 2. 在新项目独立路径建立依赖锁，校验Java业务JAR与Hadoop；不全局覆盖旧环境。
 3. 独立HDFS命名空间、数据库、账号、端口和日志目录；若复用已有HDFS守护进程，必须确认兼容并使用独立根，不执行namenode format。
 4. 执行真实YARN小业务作业、MariaDB迁移/只读权限测试。
-5. CUDA tensor分配、GRU forward/backward/update、checkpoint往返、AMP与FP32预检、峰值遥测。
-6. 100万→1000万→全量数据阶梯，锁定实测配置。数据读盘对比/mnt/e与Linux缓存需明确冷/热缓存，不以一次耗时宣称瓶颈。
+5. CUDA tensor 分配、GRU forward/backward/update、checkpoint 往返、AMP 与 FP32 预检、峰值遥测。
+6. 100 万 → 1000 万 → 全量数据阶梯，锁定实测配置。
 
-预计后续安装与启动命令由实施阶段运行手册提供；本轮不伪造可执行成功记录。所有版本、路径和端口必须通过配置注入，无旧hadoop-lab硬编码。
+所有路径、端口与连接参数均通过 `config/development.toml` 与 `scripts/dev-env.sh` 注入，避免在代码中硬编码本机路径或端口。
