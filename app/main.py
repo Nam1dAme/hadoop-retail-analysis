@@ -35,12 +35,22 @@ def main():
     a,b=st.columns([4,1.2],vertical_alignment='center')
     with a:st.html(f'<div class="page-crumb">工作台 / {h(title)}</div><div class="page-heading"><h1>{h(title)}</h1><p>{h(subtitle)}</p></div>')
     with b:switch=st.button('切换到当前版本',use_container_width=True)
+    previous_release=st.session_state.get('fixed_release')
+    previous_id=previous_release.get('release_id') if isinstance(previous_release,dict) else None
     if 'fixed_release' not in st.session_state or switch:
-        try:st.session_state['fixed_release']=api.get('/releases/current')['data'];st.session_state.pop('release_error',None)
+        try:
+            new_release=api.get('/releases/current')['data']
+            st.session_state['fixed_release']=new_release
+            st.session_state.pop('release_error',None)
+            if switch or new_release.get('release_id')!=previous_id:
+                for stale_key in ('entity_detail','active_user','prediction_user','summary_report'):
+                    st.session_state.pop(stale_key,None)
         except ApiFault as fault:st.session_state['fixed_release']=None;st.session_state['release_error']=fault
     release=st.session_state.get('fixed_release');api.release=release
     if release:
-        st.html('<div class="context-bar"><span class="context-status"><i class="context-dot"></i>数据版本已固定</span>'+f'<span>版本 <b>{h(release["release_id"])}</b></span><span>北京时间</span><span>2017-11-25 至 2017-12-04（不含）</span><span>购买行为预测</span></div>')
+        source_start=release.get('source_start','2017-11-25')
+        source_end=release.get('source_end','2017-12-04')
+        st.html('<div class="context-bar"><span class="context-status"><i class="context-dot"></i>数据版本已固定</span>'+f'<span>版本 <b>{h(release["release_id"])}</b></span><span>北京时间</span><span>{h(source_start)} 至 {h(source_end)}（不含）</span><span>购买行为预测</span></div>')
         try:
             view(api,release)
             st.html(f'<span data-behavior-page-ready="{h(page)}" hidden></span>')

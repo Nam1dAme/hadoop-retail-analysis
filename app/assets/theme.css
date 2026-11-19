@@ -80,34 +80,16 @@
 [class*="st-key-panel_"]{min-width:0;max-width:100%}
 [class*="st-key-panel_"] [data-testid="stElementContainer"],[class*="st-key-panel_"] [data-testid="stHtml"],[class*="st-key-panel_"] [data-testid="stDataFrame"]{min-width:0;max-width:100%}
 [class*="st-key-panel_"] [data-testid="stDataFrame"]{overflow-x:auto}
-.st-key-overview_story{background:#EAF0FB;border-left:3px solid #9DB3ED;border-radius:0 8px 8px 0;padding:20px}
-.story-title{font-size:13px;color:#61769F;margin:0 0 18px}
-.story-stat{font-size:24px;line-height:1.25;color:#2D4675;font-variant-numeric:tabular-nums;margin-bottom:8px}
-.story-note{font-size:12px;color:#63738D;line-height:1.8;margin:0 0 24px;max-width:40ch}
 .empty-state{text-align:center;border:1px dashed #C7D3E4;border-radius:9px;padding:38px 18px;margin:8px 0;color:var(--muted);background:#FAFCFF}
-.empty-symbol{display:block;font-family:'Retail Numerals',sans-serif;font-size:32px;color:#98AAC6;line-height:1.1;margin-bottom:12px}
 .empty-state h3{font-size:17px;color:#506381;font-weight:500;margin:0 0 8px}
 .empty-state p{font-size:13px;margin:0 auto;max-width:60ch}
 [data-baseweb="tab-list"]{gap:20px;border-bottom:1px solid var(--line);background:transparent}
 button[data-baseweb="tab"]{font-size:13px;padding:5px 2px 10px;min-height:36px}
 [data-testid="stDataFrame"]{font-size:13px}
-.pipeline{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:12px;margin:8px 0 3px}
-.pipeline-step{position:relative;padding:14px 13px;background:#F6F8FC;border-top:3px solid #C4D0E2;border-radius:0 0 5px 5px;min-width:0}
-.pipeline-step.done{border-color:var(--teal)}
-.pipeline-step.failed{border-color:var(--amber)}
-.pipeline-step.running{border-color:var(--blue)}
-.pipeline-step strong{font-size:13px;display:block;font-weight:500;margin-bottom:12px}
-.pipeline-step span{display:block;font-size:12px;color:#586B87}
-.pipeline-step small{display:block;font-size:11px;color:#8390A6;margin-top:6px}
-.quality-band{display:flex;min-height:12px;border-radius:4px;overflow:hidden;margin:12px 0 18px;background:#EEF2F7}
-.quality-band span{min-width:3px}
-.quality-legend{display:flex;gap:20px;flex-wrap:wrap;font-size:12px;color:#65758E}
-.quality-legend i{display:inline-block;width:7px;height:7px;margin-right:7px;border-radius:2px}
-.small-note{font-size:12px;color:var(--muted);line-height:1.75;max-width:80ch}
 @media(min-width:1280px){.metric-strip:has(.metric:nth-child(6)){grid-template-columns:1.5fr 1.25fr 1.5fr .8fr .8fr 1fr;gap:12px}.metric strong{font-size:22px}}
 @media(min-width:1550px){.metric strong{font-size:25px}}
-@media(max-width:1000px){[data-testid="stMainBlockContainer"]{padding:1.7rem 1.5rem 3rem}.metric strong{font-size:25px}.pipeline{grid-template-columns:repeat(3,minmax(0,1fr))}}
-@media(max-width:767px){[data-testid="stMainBlockContainer"]{padding:1.7rem 1rem 2.5rem}[data-testid="stHorizontalBlock"]{flex-wrap:wrap!important}[data-testid="stColumn"]{min-width:0!important;flex:1 1 100%!important;width:100%!important}[data-testid="stForm"] [data-testid="stColumn"]{flex:1 1 140px!important}.metric-strip{grid-template-columns:repeat(2,minmax(0,1fr));gap:22px 12px}.metric strong{font-size:24px}.metric small{font-size:10px}.page-heading h1{font-size:26px}.context-bar{gap:8px 14px;font-size:11px}.pipeline{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:1000px){[data-testid="stMainBlockContainer"]{padding:1.7rem 1.5rem 3rem}.metric strong{font-size:25px}}
+@media(max-width:767px){[data-testid="stMainBlockContainer"]{padding:1.7rem 1rem 2.5rem}[data-testid="stHorizontalBlock"]{flex-wrap:wrap!important}[data-testid="stColumn"]{min-width:0!important;flex:1 1 100%!important;width:100%!important}[data-testid="stForm"] [data-testid="stColumn"]{flex:1 1 140px!important}.metric-strip{grid-template-columns:repeat(2,minmax(0,1fr));gap:22px 12px}.metric strong{font-size:24px}.metric small{font-size:10px}.page-heading h1{font-size:26px}.context-bar{gap:8px 14px;font-size:11px}}
 @media(prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important;scroll-behavior:auto!important}}
 @media(max-width:420px){.metric strong{font-size:20px}}
 .stApp:has([data-testid="stSidebar"][aria-expanded="false"]) .page-crumb{padding-left:52px}

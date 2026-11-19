@@ -4,11 +4,18 @@ from html import escape
 from pathlib import Path
 import streamlit as st
 
+@st.cache_data
+def _load_theme_css():
+    assets = Path(__file__).parent / 'assets'
+    css = (assets / 'theme.css').read_text(encoding='utf-8')
+    for name in ('plex', 'noto'):
+        encoded = base64.b64encode((assets / f'{name}.woff2').read_bytes()).decode('ascii')
+        css = css.replace('{{' + name + '}}', encoded)
+    return css
+
+
 def install_style():
-    assets=Path(__file__).parent/'assets'
-    css=(assets/'theme.css').read_text()
-    for name in ('plex','noto'):css=css.replace('{{'+name+'}}',base64.b64encode((assets/(name+'.woff2')).read_bytes()).decode())
-    st.html('<style>'+css+'</style>')
+    st.html('<style>' + _load_theme_css() + '</style>')
 
 def h(value):return escape(str(value),quote=True)
 

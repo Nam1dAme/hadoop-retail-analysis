@@ -51,3 +51,21 @@ def lines(rows,x,series,height=310):
                                 name=label,mode='lines+markers',line=dict(color=color,width=2),connectgaps=False))
     fig.update_layout(showlegend=True)
     return finish(fig,height)
+
+
+def calibration(bins,height=310):
+    fig=go.Figure()
+    fig.add_trace(go.Scatter(
+        x=[0,1],y=[0,1],
+        name='理想校准 (y = x)',mode='lines',
+        line=dict(color='#9AA8BE',width=1.5,dash='dash'),
+        hoverinfo='skip',
+    ))
+    fig.add_trace(go.Scatter(
+        x=[float(r['mean_score']) if r.get('mean_score') is not None else None for r in bins],
+        y=[float(r['observed_rate']) if r.get('observed_rate') is not None else None for r in bins],
+        name='实际购买比例',mode='lines+markers',
+        line=dict(color='#16838B',width=2),connectgaps=False,
+    ))
+    fig.update_layout(showlegend=True)
+    return finish(fig,height)
