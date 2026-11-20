@@ -1,6 +1,8 @@
 """Full-population training, bounded scoring and epoch-boundary crash recovery."""
+from contextlib import closing
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import random
@@ -11,9 +13,10 @@ import numpy as np
 import torch
 from torch.nn import functional as F
 from orchestration.common import ROOT, atomic_json, encode, fingerprint, sha, now, stamp, commit, ManifestError, PipelineError
-from .models import make_model, seed_all, tensors, rule_scores, FEATURES, NUMERIC_DIM
+from .models import make_model, seed_all, rule_scores, FEATURES, NUMERIC_DIM
 from . import gbdt as gbdt_module
-from .shards import ShardDataset, training_groups
+from .pipeline import prepared_batches
+from .shards import SPECS, training_groups
 from .metrics import SCORE_DTYPE, evaluate_file, choose_threshold
 
 
@@ -60,20 +63,31 @@ def resource_guard(device, lease=None):
         raise PipelineError('Training resource budget exceeded: ' + encode(usage))
 
 
-def score(dataset, model, device, algorithm, output, batch_size=512, rate=None, lease=None, rule=None, gbdt=None):
+def score(dataset, model, device, algorithm, output, batch_size=None, rate=None, lease=None, rule=None, gbdt=None,
+          *, prefetch_batches=None):
     """Write exactly one score per sample in immutable input order; evaluation is FP32."""
     output = Path(output)
     temporary = output.with_suffix('.tmp.npy')
     prediction = np.lib.format.open_memmap(temporary, mode='w+', dtype=SCORE_DTYPE,
                                          shape=(dataset.manifest['rows'],))
-    columns = ('numeric',) if algorithm in ('LOGISTIC', 'RULE', 'GBDT') else FEATURES if algorithm == 'GRU' else ()
-    columns = (*columns, 'label', 'cohort', 'sample_key', 'as_of')
+    features = ('numeric',) if algorithm in ('LOGISTIC', 'RULE', 'GBDT') else FEATURES if algorithm == 'GRU' else ()
+    columns = (*features, 'label', 'cohort', 'sample_key', 'as_of')
+    if batch_size is None:
+        batch_size = {'LOGISTIC': 4096, 'GRU': 2048}.get(algorithm, 512)
+    if prefetch_batches is None:
+        prefetch_batches = device.type == 'cuda'
+    options = {'trim_sequences': True} if algorithm == 'GRU' else {}
+    batches = dataset.batches(batch_size, shuffle=False, columns=columns, **options)
     if model is not None:
         model.eval()
+        source = (([{key: batch[key] for key in features}], batch) for batch in batches)
+        batches = prepared_batches(source, device, algorithm, prefetch_batches=prefetch_batches)
+    else:
+        batches = (([], batch) for batch in batches)
     offset = 0
     digest = hashlib.sha256()
-    with torch.no_grad():
-        for batch in dataset.batches(batch_size, shuffle=False, columns=columns):
+    with torch.inference_mode(), torch.autocast(device.type, enabled=False), closing(batches):
+        for inputs, batch in batches:
             resource_guard(device, lease)
             if algorithm == 'CONSTANT':
                 values = np.full(len(batch['label']), rate, dtype=np.float64)
@@ -86,8 +100,7 @@ def score(dataset, model, device, algorithm, output, batch_size=512, rate=None, 
                     raise ManifestError('GBDT scoring requires the frozen model')
                 values = gbdt_module.predict_proba(gbdt, batch['numeric'])
             else:
-                inputs = tensors(batch, device, algorithm)
-                values = torch.sigmoid(model(inputs).float()).cpu().numpy().astype(np.float64)
+                values = torch.sigmoid(model(inputs[0]).float()).cpu().numpy()
             if not np.isfinite(values).all():
                 raise PipelineError('Non-finite model scores')
             end = offset + len(values)
@@ -117,58 +130,125 @@ def record_metrics(db, model_id, split, result, evaluation_hash):
                           (model_id, split, cohort, name, values.get(name), values['sample_count'], values['positive_count'], values.get('reason'), evaluation_hash))
 
 
+def backward_group(model, scaler, group, weights, device):
+    loss_total = None
+    for inputs, weight in zip(group, weights):
+        with torch.autocast(device.type, dtype=torch.float16, enabled=scaler.is_enabled()):
+            logits = model(inputs)
+        loss = F.binary_cross_entropy_with_logits(logits.float(), inputs['label'])
+        weighted = loss.detach().double() * len(inputs['label'])
+        loss_total = weighted if loss_total is None else loss_total + weighted
+        scaler.scale(loss * weight).backward()
+    value = loss_total.item()
+    if not math.isfinite(value):
+        raise PipelineError('Non-finite training loss')
+    return value
+
+
+def optimizer_update(model, optimizer, scaler):
+    scaler.unscale_(optimizer)
+    norm = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.)
+    previous_scale = scaler.get_scale()
+    if not scaler.is_enabled() and not torch.isfinite(norm):
+        raise PipelineError('Non-finite unscaled gradient')
+    scaler.step(optimizer)
+    scaler.update()
+    skipped = scaler.get_scale() < previous_scale
+    if scaler.is_enabled() and not skipped and not torch.isfinite(norm):
+        raise PipelineError('Non-finite unscaled gradient')
+    return skipped
+
+
+def train_batches(train, device, algorithm, micro, effective, seed, epoch, *, bucket_by_length, prefetch_batches):
+    columns = (*FEATURES, 'label') if algorithm == 'GRU' else ('numeric', 'label')
+    groups = training_groups(train, micro, effective, seed=seed, epoch=epoch, columns=columns,
+                             bucket_by_length=bucket_by_length, trim_sequences=algorithm == 'GRU')
+    source = ((group, (weights, count)) for group, weights, count in groups)
+    return prepared_batches(source, device, algorithm, prefetch_batches=prefetch_batches)
+
+
+def _probe_batch(train, algorithm, device, seed, micro):
+    seed_all(seed)
+    model = make_model(algorithm).to(device)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=.001, weight_decay=1e-4)
+    amp = device.type == 'cuda'
+    scaler = torch.amp.GradScaler('cuda', enabled=amp)
+    columns = (*FEATURES, 'label') if algorithm == 'GRU' else ('numeric', 'label')
+    rows = min(micro, max(shard['rows'] for shard in train.manifest['shards']))
+    # Reserve for the largest packed shape and both staging slots, including the long-tail bucket.
+    batch = {key: np.zeros((rows, *SPECS[key][1]), dtype=SPECS[key][0]) for key in columns}
+    if algorithm == 'GRU':
+        batch['length'].fill(SPECS['category'][1][0])
+        for key in ('category', 'behavior', 'hour'):
+            batch[key].fill(1)
+    batch['label'][::2] = 1
+    precision = {}
+
+    def record(name, select):
+        def observe(module, inputs, output):
+            precision[name] = str(select(output).dtype)
+        return observe
+
+    model.register_forward_hook(record('logits_dtype', lambda output: output))
+    if algorithm == 'GRU':
+        model.gru.register_forward_hook(record('gru_dtype', lambda output: output[1]))
+    skipped = 0
+    steps = 5
+    batches = prepared_batches((([batch], None) for _ in range(steps)), device, algorithm, prefetch_batches=amp)
+    with closing(batches):
+        for inputs, _ in batches:
+            optimizer.zero_grad(set_to_none=True)
+            backward_group(model, scaler, inputs, [1.], device)
+            skipped += optimizer_update(model, optimizer, scaler)
+    if skipped == steps or (amp and precision['logits_dtype'] != 'torch.float16'):
+        raise PipelineError('Preflight did not observe a finite optimizer update with the requested precision')
+    return dict(tested_rows=rows, amp=amp, optimizer_updates=steps - skipped, skipped_updates=skipped,
+                **precision, **resource_usage(device))
+
+
 def preflight(train, algorithm, device, seed=42):
     if algorithm == 'GRU' and device.type != 'cuda':
         raise PipelineError('Formal GRU training requires CUDA')
-    candidates = (1024, 512, 256, 128, 64, 32) if device.type == 'cuda' else (256,)
+    if device.type == 'cuda' and not torch.cuda.is_available():
+        raise PipelineError('CUDA is unavailable for training preflight')
+    if not train.manifest['rows']:
+        raise PipelineError('Training requires a nonempty TRAIN split')
+    candidates = (512,)
+    if device.type == 'cuda':
+        # Effective batch stays 512 (the v1 optimizer protocol); length bucketing and prefetch
+        # supply the throughput gain, larger micro batches would change optimization dynamics.
+        candidates = (512, 256, 128, 64, 32)
     evidence = []
     for micro in candidates:
-        model = optimizer = inputs = loss = None
         try:
-            seed_all(seed)
             if device.type == 'cuda':
                 torch.cuda.empty_cache()
                 torch.cuda.reset_peak_memory_stats()
-            model = make_model(algorithm).to(device)
-            optimizer = torch.optim.AdamW(model.parameters(), lr=.001, weight_decay=1e-4)
-            batch = next(train.batches(micro, columns=(*FEATURES, 'label') if algorithm == 'GRU' else ('numeric', 'label')))
-            inputs = tensors(batch, device, algorithm)
-            scaler = torch.amp.GradScaler('cuda', enabled=device.type == 'cuda')
-            for _ in range(3):
-                optimizer.zero_grad(set_to_none=True)
-                with torch.autocast(device.type, dtype=torch.float16, enabled=device.type == 'cuda'):
-                    logits = model(inputs)
-                loss = F.binary_cross_entropy_with_logits(logits.float(), inputs['label'])
-                if not torch.isfinite(loss):
-                    raise PipelineError('Preflight loss is non-finite')
-                scaler.scale(loss).backward()
-                scaler.unscale_(optimizer)
-                torch.nn.utils.clip_grad_norm_(model.parameters(), 1., error_if_nonfinite=True)
-                scaler.step(optimizer)
-                scaler.update()
-            if device.type == 'cuda':
-                torch.cuda.synchronize()
-            usage = resource_usage(device)
+            usage = _probe_batch(train, algorithm, device, seed, micro)
             evidence.append(dict(micro_batch=micro, **usage))
             if usage['peak_allocated_mib'] <= 6144 and usage['peak_reserved_mib'] <= 6656 and usage['rss_mib'] <= 3072:
                 return micro, evidence
         except torch.cuda.OutOfMemoryError:
             evidence.append(dict(micro_batch=micro, error='CUDA_OOM'))
         finally:
-            del model, optimizer, inputs, loss
             if device.type == 'cuda':
                 torch.cuda.empty_cache()
     raise PipelineError('Training preflight failed at minimum batch: ' + encode(evidence))
 
 
-def fit(lease, experiment, train, validation, algorithm, learning_rate, directory, sample_hash, seed=42):
-    device = torch.device('cuda' if algorithm == 'GRU' else 'cpu')
+def fit(lease, experiment, train, validation, algorithm, learning_rate, directory, sample_hash, seed=42, *, device=None):
+    device = torch.device(device or ('cuda' if algorithm == 'GRU' else 'cpu'))
     micro, preflight_evidence = preflight(train, algorithm, device, seed)
-    effective_batch = max(512, micro)
+    effective_batch = 512
+    bucket_by_length = algorithm == 'GRU'
+    prefetch_batches = device.type == 'cuda'
     identity = dict(schema_version='model-v2', algorithm=algorithm, learning_rate=learning_rate,
                     numeric_dim=NUMERIC_DIM, weight_decay=1e-4, seed=seed, effective_batch=effective_batch, micro_batch=micro,
+                    device=str(device), precision='FP16_AMP' if device.type == 'cuda' else 'FP32',
+                    bucket_by_length=bucket_by_length, prefetch_batches=prefetch_batches,
                     max_epochs=20, patience=3, selection='VALIDATION_AP', sample_hash=sample_hash,
-                    implementation=fingerprint({str(p.relative_to(ROOT)): sha(p) for p in sorted((ROOT/'ml').glob('*.py')) if p.name != 'benchmark.py'}))
+                    implementation=fingerprint({str(p.relative_to(ROOT)): sha(p) for p in sorted((ROOT/'ml').glob('*.py'))
+                                                if p.name not in ('benchmark.py', 'profile_pipeline.py')}))
     config_hash = fingerprint(identity)
     with lease.db.cursor() as q:
         q.execute('SELECT * FROM model_run WHERE experiment_id=%s AND algorithm=%s AND config_hash=%s',
@@ -209,10 +289,6 @@ def fit(lease, experiment, train, validation, algorithm, learning_rate, director
         model.load_state_dict(checkpoint['model'])
         optimizer.load_state_dict(checkpoint['optimizer'])
         scaler.load_state_dict(checkpoint['scaler'])
-        for state in optimizer.state.values():
-            for key, value in state.items():
-                if isinstance(value, torch.Tensor):
-                    state[key] = value.to(device)
         torch.set_rng_state(checkpoint['torch_rng'])
         if device.type == 'cuda':
             torch.cuda.set_rng_state_all(checkpoint['cuda_rng'])
@@ -236,35 +312,20 @@ def fit(lease, experiment, train, validation, algorithm, learning_rate, director
             total = 0
             loss_total = 0.
             skipped = 0
-            columns = (*FEATURES, 'label') if algorithm == 'GRU' else ('numeric', 'label')
-            for index, (group, weights, count) in enumerate(training_groups(train, micro, effective_batch, epoch=epoch, columns=columns)):
-                resource_guard(device, lease)
-                optimizer.zero_grad(set_to_none=True)
-                for batch, weight in zip(group, weights):
-                    inputs = tensors(batch, device, algorithm)
-                    with torch.autocast(device.type, dtype=torch.float16, enabled=device.type == 'cuda'):
-                        logits = model(inputs)
-                    loss = F.binary_cross_entropy_with_logits(logits.float(), inputs['label'])
-                    if not torch.isfinite(loss):
-                        raise PipelineError('Non-finite training loss')
-                    loss_total += loss.detach().item() * len(batch['label'])
-                    scaler.scale(loss * weight).backward()
-                scaler.unscale_(optimizer)
-                # GradScaler handles overflow; finite gradients are clipped after unscale.
-                norm = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.)
-                previous_scale = scaler.get_scale()
-                scaler.step(optimizer)
-                scaler.update()
-                if scaler.get_scale() < previous_scale:
-                    skipped += 1
-                elif not torch.isfinite(norm):
-                    raise PipelineError('Non-finite unscaled gradient')
-                total += count
-                if index % 200 == 0:
-                    atomic_json(local/'progress.json', dict(status='RUNNING', algorithm=algorithm, epoch=epoch, samples=total,
-                                train_rows=train.manifest['rows'], updated_at=stamp(), **resource_usage(device)))
-                if index % 1000 == 0:
-                    print(encode(dict(model=model_id, algorithm=algorithm, epoch=epoch, samples=total)), flush=True)
+            batches = train_batches(train, device, algorithm, micro, effective_batch, seed, epoch,
+                                    bucket_by_length=bucket_by_length, prefetch_batches=prefetch_batches)
+            with closing(batches):
+                for index, (group, (weights, count)) in enumerate(batches):
+                    resource_guard(device, lease)
+                    optimizer.zero_grad(set_to_none=True)
+                    loss_total += backward_group(model, scaler, group, weights, device)
+                    skipped += optimizer_update(model, optimizer, scaler)
+                    total += count
+                    if index % 200 == 0:
+                        atomic_json(local/'progress.json', dict(status='RUNNING', algorithm=algorithm, epoch=epoch, samples=total,
+                                    train_rows=train.manifest['rows'], updated_at=stamp(), **resource_usage(device)))
+                    if index % 1000 == 0:
+                        print(encode(dict(model=model_id, algorithm=algorithm, epoch=epoch, samples=total)), flush=True)
             if total != train.manifest['rows']:
                 raise ManifestError('Incomplete training epoch')
             score(validation, model, device, algorithm, local/'validation-current.npy', lease=lease)
