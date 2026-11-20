@@ -325,6 +325,13 @@ def create_app(config=None,pool=None,cursor_key=None):
             for field in ('first_ts','last_ts'):row[field]=datetime.fromtimestamp(row[field],timezone.utc)
         return response(request,rows,p.release_id)
 
+    def _cursor_datetime(value):
+        if isinstance(value, datetime):
+            if value.tzinfo is not None:
+                value = value.astimezone(timezone.utc).replace(tzinfo=None)
+            return value.isoformat(sep=' ')
+        return str(value)
+
     @app.get('/api/v1/predictions')
     def predictions(request:Request,p:Annotated[PredictionParams,Query()]):
         release=ready(p.release_id);model=str(p.model_run_id or release['selected_model_id'])
@@ -334,11 +341,13 @@ def create_app(config=None,pool=None,cursor_key=None):
         conditions='release_id=%s AND mode=%s AND model_run_id=%s';args=[str(p.release_id),p.mode,model]
         if p.user_id:conditions+=' AND user_id=%s';args.append(p.user_id)
         if p.cursor:
-            last_score,last_user=signer.decode(p.cursor,context('predictions',p,model))
-            conditions+=' AND (score<%s OR (score=%s AND user_id>%s))';args+=[last_score,last_score,last_user]
-        rows=db.all('SELECT user_id,score,predicted_positive,label AS observed_label,history_event_count,as_of,window_end,model_run_id FROM prediction WHERE '+conditions+' ORDER BY score DESC,user_id ASC LIMIT %s',(*args,p.limit+1))
+            pos=signer.decode(p.cursor,context('predictions',p,model))
+            if not isinstance(pos,list) or len(pos)!=3:raise CursorError('Invalid prediction cursor')
+            last_score,last_user,last_as_of=pos
+            conditions+=' AND (score<%s OR (score=%s AND (user_id>%s OR (user_id=%s AND as_of>%s))))';args+=[last_score,last_score,last_user,last_user,last_as_of]
+        rows=db.all('SELECT user_id,score,predicted_positive,label AS observed_label,history_event_count,as_of,window_end,model_run_id FROM prediction WHERE '+conditions+' ORDER BY score DESC,user_id ASC,as_of ASC LIMIT %s',(*args,p.limit+1))
         for row in rows:row.update(predicted_positive=bool(row['predicted_positive']),label_status='UNOBSERVED' if p.mode=='FORECAST' else 'OBSERVED')
-        return paged(request,p,'predictions',rows,lambda r:[r['score'],r['user_id']],model)
+        return paged(request,p,'predictions',rows,lambda r:[r['score'],r['user_id'],_cursor_datetime(r['as_of'])],model)
 
     def model_data(release,model_id):
         row=db.one('SELECT * FROM model_run WHERE model_run_id=%s AND experiment_id=%s',(str(model_id),release['experiment_id']))
