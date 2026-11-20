@@ -118,30 +118,40 @@ def score(dataset, model, device, algorithm, output, batch_size=None, rate=None,
         batches = (([], batch) for batch in batches)
     offset = 0
     digest = hashlib.sha256()
-    with torch.inference_mode(), torch.autocast(device.type, enabled=False), closing(batches):
-        for inputs, batch in batches:
-            resource_guard(device, lease)
-            if algorithm == 'CONSTANT':
-                values = np.full(len(batch['label']), rate, dtype=np.float64)
-            elif algorithm == 'RULE':
-                if rule is None:
-                    raise ManifestError('RULE scoring requires the frozen rule table')
-                values = rule_scores(batch['numeric'], rule)
-            elif algorithm == 'GBDT':
-                if gbdt is None:
-                    raise ManifestError('GBDT scoring requires the frozen model')
-                values = gbdt_module.predict_proba(gbdt, batch['numeric'])
-            else:
-                values = torch.sigmoid(model(inputs[0]).float()).cpu().numpy()
-            if not np.isfinite(values).all():
-                raise PipelineError('Non-finite model scores')
-            end = offset + len(values)
-            prediction['score'][offset:end] = values
-            for key in ('label', 'cohort', 'sample_key', 'as_of'):
-                prediction[key][offset:end] = batch[key]
-            for key in batch['sample_key']:
-                digest.update(bytes(key) + b'\n')
-            offset = end
+    if device.type == 'cuda':
+        prev_matmul_tf32 = torch.backends.cuda.matmul.allow_tf32
+        prev_cudnn_tf32 = torch.backends.cudnn.allow_tf32
+        torch.backends.cuda.matmul.allow_tf32 = False
+        torch.backends.cudnn.allow_tf32 = False
+    try:
+        with torch.inference_mode(), torch.autocast(device.type, enabled=False), closing(batches):
+            for inputs, batch in batches:
+                resource_guard(device, lease)
+                if algorithm == 'CONSTANT':
+                    values = np.full(len(batch['label']), rate, dtype=np.float64)
+                elif algorithm == 'RULE':
+                    if rule is None:
+                        raise ManifestError('RULE scoring requires the frozen rule table')
+                    values = rule_scores(batch['numeric'], rule)
+                elif algorithm == 'GBDT':
+                    if gbdt is None:
+                        raise ManifestError('GBDT scoring requires the frozen model')
+                    values = gbdt_module.predict_proba(gbdt, batch['numeric'])
+                else:
+                    values = torch.sigmoid(model(inputs[0]).float()).cpu().numpy()
+                if not np.isfinite(values).all():
+                    raise PipelineError('Non-finite model scores')
+                end = offset + len(values)
+                prediction['score'][offset:end] = values
+                for key in ('label', 'cohort', 'sample_key', 'as_of'):
+                    prediction[key][offset:end] = batch[key]
+                for key in batch['sample_key']:
+                    digest.update(bytes(key) + b'\n')
+                offset = end
+    finally:
+        if device.type == 'cuda':
+            torch.backends.cuda.matmul.allow_tf32 = prev_matmul_tf32
+            torch.backends.cudnn.allow_tf32 = prev_cudnn_tf32
     if offset != dataset.manifest['rows'] or digest.hexdigest() != dataset.manifest['sample_order_sha256']:
         raise ManifestError('Prediction population/order changed')
     prediction.flush()

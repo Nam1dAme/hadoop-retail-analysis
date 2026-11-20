@@ -210,6 +210,45 @@ def test_amp_config_selection(monkeypatch):
     assert amp_config(torch.device('cuda')) == (True, torch.float16, True, 'FP16_AMP')
 
 
+@pytest.mark.skipif(not torch.cuda.is_available(), reason='CUDA unavailable')
+def test_score_disables_and_restores_tf32(tmp_path):
+    from ml.shards import ShardDataset, ShardWriter
+    from ml.training import score
+
+    writer = ShardWriter(tmp_path/'VAL', np.zeros(NUMERIC_DIM), np.ones(NUMERIC_DIM), capacity=8)
+    category = np.zeros(128, dtype=np.uint16)
+    behavior = np.zeros(128, dtype=np.uint8)
+    hour = np.zeros(128, dtype=np.uint8)
+    category[:2], behavior[:2], hour[:2] = 1, 1, 1
+    for i in range(4):
+        writer.add(dict(user_id=str(i + 1), as_of=1512057600, length=2,
+                        category=category, behavior=behavior,
+                        hour=hour, gap=np.zeros(128, dtype=np.float32),
+                        numeric=np.zeros(NUMERIC_DIM, dtype=np.float32), label=i % 2,
+                        history_event_count=2, cohort='SEEN_TRAIN'))
+    writer.finish()
+    dataset = ShardDataset(tmp_path/'VAL')
+
+    seed_all(42, deterministic=False)
+    assert torch.backends.cuda.matmul.allow_tf32 is True
+    assert torch.backends.cudnn.allow_tf32 is True
+
+    observed = {}
+    model = BehaviorGRU().to(torch.device('cuda')).eval()
+    hook = model.head.register_forward_hook(lambda *_: observed.update(
+        matmul=torch.backends.cuda.matmul.allow_tf32,
+        cudnn=torch.backends.cudnn.allow_tf32,
+    ))
+    try:
+        score(dataset, model, torch.device('cuda'), 'GRU', tmp_path/'scores.npy')
+    finally:
+        hook.remove()
+
+    assert observed == {'matmul': False, 'cudnn': False}
+    assert torch.backends.cuda.matmul.allow_tf32 is True
+    assert torch.backends.cudnn.allow_tf32 is True
+
+
 def test_validation_only_model_selection():
     def row(ap,ll,params):return dict(validation_metrics={'ALL':{'ap':ap,'logloss':ll}},parameter_count=params)
     simple=row(.5,.4,15);deep=row(.5+5e-7,.4,1000)
