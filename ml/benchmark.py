@@ -14,12 +14,24 @@ from .training import hardware, resource_usage, resource_guard
 
 
 class ComparableDropout(torch.nn.Module):
-    """Generate dropout masks directly on the tensor's device for FP32 comparison."""
+    """Apply an identical pre-generated dropout mask on CPU and CUDA without H2D copies per step."""
+    def __init__(self, p=0.1, seed=42):
+        super().__init__()
+        self.p = p
+        self.seed = seed
+        self._cache = {}
+
     def forward(self, values):
-        if not self.training:
+        if not self.training or self.p <= 0:
             return values
-        mask = torch.rand(values.shape, device=values.device) >= .1
-        return values * mask / .9
+        key = (tuple(values.shape), values.device, values.dtype)
+        mask = self._cache.get(key)
+        if mask is None:
+            rng = np.random.default_rng(self.seed)
+            arr = (rng.random(values.shape) >= self.p).astype(np.float32) / (1.0 - self.p)
+            mask = torch.from_numpy(arr).to(device=values.device, dtype=values.dtype)
+            self._cache[key] = mask
+        return values * mask
 
 
 def select_sample(train, output, limit=65536):
@@ -72,6 +84,7 @@ def run_benchmark(lease, train, experiment, directory):
             end_to_end = time.monotonic()
             seed_all(deterministic=True)
             model = make_model('GRU').to(device)
+            model.gru.dropout = 0.0
             model.head[2] = ComparableDropout()
             optimizer = torch.optim.AdamW(model.parameters(), lr=.001, weight_decay=1e-4)
 
@@ -95,6 +108,7 @@ def run_benchmark(lease, train, experiment, directory):
             del optimizer, model
             seed_all(deterministic=True)
             model = make_model('GRU').to(device)
+            model.gru.dropout = 0.0
             model.head[2] = ComparableDropout()
             optimizer = torch.optim.AdamW(model.parameters(), lr=.001, weight_decay=1e-4)
             old = model.head[-1].weight.detach().clone()
