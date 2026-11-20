@@ -6,10 +6,11 @@ from orchestration.common import atomic_json,ManifestError,sha,fingerprint
 from .models import NUMERIC_DIM
 
 SPECS={'as_of':('<i8',()),'length':('u1',()),'category':('<u2',(128,)),'behavior':('u1',(128,)),'hour':('u1',(128,)),'gap':('<f4',(128,)),'numeric':('<f4',(NUMERIC_DIM,)),'label':('i1',()),'history_event_count':('<i8',()),'cohort':('u1',())}
+SEQUENCE_COLUMNS = ('category', 'behavior', 'hour', 'gap')
 
-def _compute_sample_keys(shard_dir,indices,as_of_arr):
-    offsets=np.load(shard_dir/'user_offsets.npy',mmap_mode='r',allow_pickle=False)
-    raw=(shard_dir/'user_ids.utf8').read_bytes()
+def _compute_sample_keys(offsets,raw,indices,as_of_arr):
+    offsets = np.asarray(offsets)
+    as_of_arr = np.asarray(as_of_arr)
     out=np.empty(len(indices),dtype='S64')
     for j,idx in enumerate(indices):
         i=int(idx)
@@ -23,7 +24,9 @@ def shard_sample_keys(shard_dir):
     if key_path.exists():
         return np.load(key_path,mmap_mode='r',allow_pickle=False)
     as_of=np.load(p/'as_of.npy',mmap_mode='r',allow_pickle=False)
-    return _compute_sample_keys(p,np.arange(len(as_of)),as_of)
+    offsets=np.load(p/'user_offsets.npy',mmap_mode='r',allow_pickle=False)
+    raw=(p/'user_ids.utf8').read_bytes()
+    return _compute_sample_keys(offsets,raw,np.arange(len(as_of)),as_of)
 class ShardWriter:
     def __init__(self,path,mean,std,capacity=32768):
         if not 1<=capacity<=32768:raise ValueError('shard capacity out of range')
@@ -113,35 +116,67 @@ class ShardDataset:
                         if bytes(legacy_keys[i])!=expected:raise ManifestError('Sample key does not match source user and anchor')
             if 'seen_count' in self.manifest and (seen,count-seen)!=(self.manifest['seen_count'],self.manifest['unseen_count']):raise ManifestError('Cohort counts differ')
             if (count,positive,negative)!=(self.manifest['rows'],self.manifest['positive_count'],self.manifest['negative_count']):raise ManifestError('Shard population differs')
-    def batches(self,batch_size=256,seed=42,epoch=0,shuffle=True,columns=None):
-        if batch_size<1:raise ValueError('batch_size must be positive')
-        rng=np.random.default_rng(seed+epoch);shards=list(self.manifest['shards'])
-        if shuffle:rng.shuffle(shards)
-        cols=(*SPECS,'sample_key') if columns is None else tuple(columns)
-        need_key='sample_key' in cols
-        npy_cols=[k for k in cols if k!='sample_key']
+    def batches(self, batch_size=256, seed=42, epoch=0, shuffle=True, columns=None, *,
+                bucket_by_length=False, trim_sequences=False):
+        if batch_size < 1:
+            raise ValueError('batch_size must be positive')
+        if bucket_by_length and not shuffle:
+            raise ValueError('Length bucketing requires shuffled batches')
+        rng = np.random.default_rng(seed + epoch)
+        shards = list(self.manifest['shards'])
+        if shuffle:
+            rng.shuffle(shards)
+        cols = (*SPECS, 'sample_key') if columns is None else tuple(columns)
+        need_key = 'sample_key' in cols
+        npy_cols = [k for k in cols if k != 'sample_key']
         for shard in shards:
-            p=self.path/shard['directory']
-            arrays={k:np.load(p/(k+'.npy'),mmap_mode='r',allow_pickle=False) for k in npy_cols}
-            key_path=p/'sample_key.npy'
-            has_legacy_key=need_key and key_path.exists()
+            p = self.path/shard['directory']
+            rows = shard['rows']
+            arrays = {k: np.load(p/(k+'.npy'), mmap_mode='r', allow_pickle=False) for k in npy_cols}
+            key_path = p/'sample_key.npy'
+            has_legacy_key = need_key and key_path.exists()
             if has_legacy_key:
-                arrays['sample_key']=np.load(key_path,mmap_mode='r',allow_pickle=False)
-            as_of_arr=arrays['as_of'] if 'as_of' in arrays else (np.load(p/'as_of.npy',mmap_mode='r',allow_pickle=False) if need_key and not has_legacy_key else None)
-            order=rng.permutation(shard['rows']) if shuffle else np.arange(shard['rows'])
-            for start in range(0,len(order),batch_size):
-                indices=order[start:start+batch_size]
-                batch={k:np.array(a[indices],copy=True) for k,a in arrays.items()}
+                arrays['sample_key'] = np.load(key_path, mmap_mode='r', allow_pickle=False)
+            if need_key and not has_legacy_key:
+                as_of = arrays.get('as_of')
+                if as_of is None:
+                    as_of = np.load(p/'as_of.npy', mmap_mode='r', allow_pickle=False)
+                offsets = np.load(p/'user_offsets.npy', mmap_mode='r', allow_pickle=False)
+                raw_ids = (p/'user_ids.utf8').read_bytes()
+            lengths = arrays.get('length')
+            if (trim_sequences or bucket_by_length) and lengths is None:
+                lengths = np.load(p/'length.npy', mmap_mode='r', allow_pickle=False)
+            order = rng.permutation(rows) if shuffle else None
+            starts = range(0, rows, batch_size)
+            if bucket_by_length:
+                # Stable sorting keeps the seeded random order among equal lengths.
+                order = order[np.argsort(lengths[order], kind='stable')]
+                starts = rng.permutation(list(starts)).tolist()
+            for start in starts:
+                end = min(start + batch_size, rows)
+                indices = order[start:end] if shuffle else slice(start, end)
+                width = int(lengths[indices].max()) if trim_sequences else None
+                batch = {}
+                for key, array in arrays.items():
+                    if trim_sequences and key in SEQUENCE_COLUMNS:
+                        array = array[:, :width]
+                    # Fancy indexing already copies. Sequential slices need one writable copy.
+                    selected = array[indices]
+                    batch[key] = selected if shuffle else np.array(selected, copy=True)
                 if need_key and not has_legacy_key:
-                    batch['sample_key']=_compute_sample_keys(p,indices,as_of_arr)
+                    batch['sample_key'] = _compute_sample_keys(offsets, raw_ids,
+                                                               indices if shuffle else range(start, end), as_of)
                 yield batch
 
-def training_groups(dataset,micro_batch=256,effective_batch=512,seed=42,epoch=0,columns=None):
+def training_groups(dataset,micro_batch=256,effective_batch=512,seed=42,epoch=0,columns=None,**batch_options):
     """跨分片累计到有效batch；返回按真实样本数归一的每个microbatch权重。"""
     if dataset.path.name!='TRAIN':raise ValueError('Training groups require TRAIN samples')
     if micro_batch<1 or effective_batch<1 or micro_batch>effective_batch:raise ValueError('Invalid batch sizes')
     group=[];total=0
-    for batch in dataset.batches(micro_batch,seed,epoch,shuffle=True,columns=columns):
+    for batch in dataset.batches(micro_batch,seed,epoch,shuffle=True,columns=columns,**batch_options):
+        if not group and len(batch['label']) == effective_batch:
+            yield [batch], [1.], effective_batch
+            continue
         offset=0;n=len(batch['label'])
         while offset<n:
             take=min(n-offset,effective_batch-total)
