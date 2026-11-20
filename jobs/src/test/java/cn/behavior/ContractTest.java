@@ -12,6 +12,8 @@ public final class ContractTest {
     for(int d=0;d<9;d++)for(int h=0;h<24;h++){Event point=event("1,2,3,pv,"+(Event.START+d*86400L+h*3600));require(point.hour()==h&&point.date().equals(java.time.LocalDate.of(2017,11,25).plusDays(d).toString()));}
     invalid(new byte[]{(byte)0xff},"BAD_ENCODING");invalid("\n".getBytes(),"BAD_FIELD_COUNT");invalid("x,2,3,oops,0".getBytes(),"BAD_ID");invalid("1,2,3,oops,0".getBytes(),"BAD_BEHAVIOR");invalid("1,2,3,pv,9223372036854775808".getBytes(),"BAD_TIMESTAMP");invalid("1,2,3,pv, 0".getBytes(),"BAD_TIMESTAMP");
     require(!event("1,2,3,pv,"+(Event.START-1)).scoped());
+    // J04users 的区间汇总以 dateOf(DAYS) 作为右开结束日；回归：曾因日期表只有 DAYS 项而越界。
+    require(Event.dateOf(0).equals("2017-11-25")&&Event.dateOf(Event.DAYS).equals("2017-12-04")&&Event.lastDate().equals("2017-12-03"));
     require(Samples.DAYS.length==8&&Samples.SPLITS.length==Samples.DAYS.length&&Samples.NUMERIC_DIM==20);
     int forecast=-1,anchor8=-1;
     for(int i=0;i<Samples.SPLITS.length;i++){

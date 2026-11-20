@@ -38,7 +38,9 @@ public final class Event implements Writable {
     START=startEpoch;DAYS=days;END=startEpoch+(long)days*86400;DATES=dates(start,days);
   }
   private static long epoch(String start){return LocalDate.parse(start).atStartOfDay(ZONE).toEpochSecond();}
-  private static String[] dates(String start,int days){LocalDate first=LocalDate.parse(start);return java.util.stream.IntStream.range(0,days).mapToObj(d->first.plusDays(d).toString()).toArray(String[]::new);}
+  /** 含 days+1 个日期：下标 days 为右开结束日（如区间汇总 R 行的 end）。 */
+  private static String[] dates(String start,int days){LocalDate first=LocalDate.parse(start);return java.util.stream.IntStream.rangeClosed(0,days).mapToObj(d->first.plusDays(d).toString()).toArray(String[]::new);}
+  /** day ∈ [0, DAYS]；DAYS 表示右开结束日。 */
   public static String dateOf(int day){return DATES[day];}
   public static String lastDate(){return DATES[DAYS-1];}
 
