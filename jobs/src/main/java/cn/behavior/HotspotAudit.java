@@ -16,6 +16,7 @@ import org.apache.hadoop.util.*;
 /** Synthetic count-only salting audit; production sequence reducers are not salted. */
 public final class HotspotAudit extends Configured implements Tool {
   public static class CsvMap extends Mapper<LongWritable,Text,Text,LongWritable> {
+    protected void setup(Context context){Event.init(context.getConfiguration());}
     protected void map(LongWritable offset,Text raw,Context context)throws IOException,InterruptedException {
       Event event;
       try {event=Event.parse(raw.getBytes(),raw.getLength(),"synthetic-hotspot",offset.get());}

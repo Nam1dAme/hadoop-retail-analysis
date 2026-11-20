@@ -1,4 +1,4 @@
-from datetime import datetime,timezone
+from datetime import date,datetime,timedelta,timezone
 import hashlib
 import json
 import os
@@ -9,6 +9,10 @@ import tomllib
 ROOT=Path(__file__).resolve().parents[1]
 BASELINE='UBA-DOC-1.0.0'
 POLICY='behavior-v1'
+# 数据集窗口的单一来源默认值；八锚点切分方案固定依赖 9 天位图，天数不可改变。
+DATASET_START_DEFAULT='2017-11-25'
+DATASET_END_DEFAULT='2017-12-03'  # 包含的最后一天
+DATASET_DAYS=9
 class PipelineError(Exception):
     code='PIPELINE_FAILED';exit_code=5
 class ConfigError(PipelineError):code='INVALID_CONFIG';exit_code=2
@@ -45,6 +49,22 @@ def load(path):
     if (c.get('synthetic',False) or c.get('benchmark',False)) and (c['database']['name']=='behavior_analytics' or root=='/behavior/v1' or work==ROOT/'var/production'):
         raise ConfigError('Synthetic/benchmark work requires isolated DB, HDFS and work_dir')
     return c
+
+def dataset_window(config=None):
+    """单一来源的数据集日期窗口。
+
+    配置 [dataset] 的 end_date 是包含的最后一天；API/查询边界使用 exclusive_end（右开）。
+    固定切分方案依赖 9 天位图与 2..9 相对日锚点，因此天数不属于可调参数。
+    """
+    if config is None:config=load(ROOT/'config/development.toml')
+    section=config.get('dataset',{}) or {}
+    start=date.fromisoformat(str(section.get('start_date',DATASET_START_DEFAULT)))
+    end=date.fromisoformat(str(section.get('end_date',DATASET_END_DEFAULT)))
+    days=(end-start).days+1
+    if days!=DATASET_DAYS:
+        raise ConfigError(f'dataset window must span {DATASET_DAYS} days for the fixed split scheme, got {days}')
+    return dict(start=start,days=days,end=end,exclusive_end=end+timedelta(days=1),
+                dates=[start+timedelta(days=d) for d in range(days)])
 
 def runtime_env():
     env=dict(os.environ)

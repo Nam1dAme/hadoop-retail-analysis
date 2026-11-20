@@ -4,23 +4,44 @@ import java.io.*;
 import java.nio.*;
 import java.nio.charset.*;
 import java.time.*;
-import java.time.format.DateTimeFormatter;
 import java.util.*;
+import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.io.*;
 
 /** 原始标识始终为字符串；来源偏移不是业务事件ID。 */
 public final class Event implements Writable {
   public static final ZoneId ZONE=ZoneId.of("Asia/Shanghai");
-  public static final long START=LocalDate.of(2017,11,25).atStartOfDay(ZONE).toEpochSecond();
-  public static final long END=START+9*86400;
+  public static final String START_KEY="behavior.dataset.start";
+  public static final String DAYS_KEY="behavior.dataset.days";
+  public static final String DEFAULT_START="2017-11-25";
+  public static final int DEFAULT_DAYS=9;
+  /** 默认值仅供未注入配置的单元测试；每个任务在 setup 中调用 init(conf) 后使用任务配置。 */
+  public static volatile long START=epoch(DEFAULT_START);
+  public static volatile int DAYS=DEFAULT_DAYS;
+  public static volatile long END=START+(long)DAYS*86400;
+  private static volatile String[] DATES=dates(DEFAULT_START,DEFAULT_DAYS);
   public static final String[] TYPES={"pv","buy","cart","fav"};
   private static final java.util.regex.Pattern ID=java.util.regex.Pattern.compile("[0-9]{1,20}"), TIMESTAMP=java.util.regex.Pattern.compile("[+-]?[0-9]+");
-  private static final String[] DATES=java.util.stream.IntStream.range(0,9).mapToObj(d->LocalDate.of(2017,11,25).plusDays(d).toString()).toArray(String[]::new);
   public String source="",user="",item="",category="",timestampToken="";
   public long offset,ts;
   public byte type;
   public Event() {}
   public Event(Event e) {source=e.source;user=e.user;item=e.item;category=e.category;timestampToken=e.timestampToken;offset=e.offset;ts=e.ts;type=e.type;}
+
+  /** 从 Hadoop Configuration 初始化静态窗口；天数固定为9，因为样本锚点与位图切分依赖9天。 */
+  public static synchronized void init(Configuration conf){
+    if(conf==null)return;
+    String start=conf.get(START_KEY,DEFAULT_START);
+    int days=conf.getInt(DAYS_KEY,DEFAULT_DAYS);
+    if(days!=DEFAULT_DAYS)throw new IllegalArgumentException(DAYS_KEY+" must be "+DEFAULT_DAYS+" (fixed 9-day sample split)");
+    long startEpoch=epoch(start);
+    START=startEpoch;DAYS=days;END=startEpoch+(long)days*86400;DATES=dates(start,days);
+  }
+  private static long epoch(String start){return LocalDate.parse(start).atStartOfDay(ZONE).toEpochSecond();}
+  private static String[] dates(String start,int days){LocalDate first=LocalDate.parse(start);return java.util.stream.IntStream.range(0,days).mapToObj(d->first.plusDays(d).toString()).toArray(String[]::new);}
+  public static String dateOf(int day){return DATES[day];}
+  public static String lastDate(){return DATES[DAYS-1];}
+
   public boolean scoped(){return ts>=START&&ts<END;}
   public int day(){return (int)((ts-START)/86400);}
   public String date(){if(scoped())return DATES[day()];return Instant.ofEpochSecond(ts).atZone(ZONE).toLocalDate().toString();}

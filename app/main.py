@@ -48,8 +48,8 @@ def main():
         except ApiFault as fault:st.session_state['fixed_release']=None;st.session_state['release_error']=fault
     release=st.session_state.get('fixed_release');api.release=release
     if release:
-        source_start=release.get('source_start','2017-11-25')
-        source_end=release.get('source_end','2017-12-04')
+        source_start=release['source_start']
+        source_end=release['source_end']
         st.html('<div class="context-bar"><span class="context-status"><i class="context-dot"></i>数据版本已固定</span>'+f'<span>版本 <b>{h(release["release_id"])}</b></span><span>北京时间</span><span>{h(source_start)} 至 {h(source_end)}（不含）</span><span>购买行为预测</span></div>')
         try:
             view(api,release)

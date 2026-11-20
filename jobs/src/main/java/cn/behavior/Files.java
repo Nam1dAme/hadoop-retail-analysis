@@ -16,6 +16,7 @@ public final class Files extends Configured implements Tool {
   public int run(String[] args)throws Exception{
     if(args.length<1)throw new IllegalArgumentException("inspect|dump path");
     Configuration c=getConf();
+    Event.init(c);
     if(args[0].equals("dump")){
       java.util.List<String> inputs=new java.util.ArrayList<>();
       try(BufferedReader paths=new BufferedReader(new InputStreamReader(System.in,StandardCharsets.UTF_8))){String path;while((path=paths.readLine())!=null)inputs.add(path);}

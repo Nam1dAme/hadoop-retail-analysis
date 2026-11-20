@@ -1,5 +1,5 @@
 import base64
-from datetime import date
+from datetime import date,timedelta
 from html import escape
 from pathlib import Path
 import streamlit as st
@@ -31,16 +31,21 @@ def metrics(items):
 def number(value):return f'{int(value):,}' if value is not None else '—'
 def ratio(value):return f'{float(value):.2%}' if value is not None else '无可计算样本'
 
-def filters(page):
+def release_window(release):
+    """窗口来自 API /releases/current；source_end 为右开边界。"""
+    return date.fromisoformat(release['source_start']),date.fromisoformat(release['source_end'])
+
+def filters(page,release):
+    start_bound,end_bound=release_window(release)
     with st.form(page+'_dates',border=False):
         a,b,c=st.columns([2,2,1],vertical_alignment='bottom')
-        with a:start=st.date_input('开始日期',date(2017,11,25),min_value=date(2017,11,25),max_value=date(2017,12,3),key=page+'_start')
-        with b:end=st.date_input('结束日期（不含）',date(2017,12,4),min_value=date(2017,11,26),max_value=date(2017,12,4),key=page+'_end')
+        with a:start=st.date_input('开始日期',start_bound,min_value=start_bound,max_value=end_bound-timedelta(days=1),key=page+'_start')
+        with b:end=st.date_input('结束日期（不含）',end_bound,min_value=start_bound+timedelta(days=1),max_value=end_bound,key=page+'_end')
         with c:submitted=st.form_submit_button('应用范围',use_container_width=True,type='primary')
     if submitted:
         if start>=end:st.error('开始日期必须早于结束日期。')
         else:st.session_state[page+'_window']=(start.isoformat(),end.isoformat())
-    start,end=st.session_state.get(page+'_window',('2017-11-25','2017-12-04'))
+    start,end=st.session_state.get(page+'_window',(start_bound.isoformat(),end_bound.isoformat()))
     return dict(start=start,end=end)
 
 def table(rows,labels=None):

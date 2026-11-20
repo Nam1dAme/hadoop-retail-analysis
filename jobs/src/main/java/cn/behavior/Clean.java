@@ -7,7 +7,7 @@ import org.apache.hadoop.mapreduce.lib.output.MultipleOutputs;
 
 public final class Clean extends Mapper<LongWritable,Text,Text,Event> {
   private MultipleOutputs outputs;private String source;
-  protected void setup(Context c){outputs=new MultipleOutputs(c);source=c.getConfiguration().get("behavior.source.sha256");if(source==null||!source.matches("[0-9a-f]{64}"))throw new IllegalArgumentException("Missing source hash");}
+  protected void setup(Context c){Event.init(c.getConfiguration());outputs=new MultipleOutputs(c);source=c.getConfiguration().get("behavior.source.sha256");if(source==null||!source.matches("[0-9a-f]{64}"))throw new IllegalArgumentException("Missing source hash");}
   protected void map(LongWritable key,Text line,Context c)throws IOException,InterruptedException {
     c.getCounter("BEHAVIOR","raw_rows").increment(1);
     try {
@@ -25,7 +25,7 @@ public final class Clean extends Mapper<LongWritable,Text,Text,Event> {
   protected void cleanup(Context c)throws IOException,InterruptedException{outputs.close();}
   public static final class Reduce extends Reducer<Text,Event,LongWritable,Event> {
     private MultipleOutputs outputs;
-    protected void setup(Context c){outputs=new MultipleOutputs(c);}
+    protected void setup(Context c){Event.init(c.getConfiguration());outputs=new MultipleOutputs(c);}
     protected void reduce(Text date,Iterable<Event> events,Context c)throws IOException,InterruptedException{
       String path="facts/date="+date.toString()+"/part";
       for(Event e:events)outputs.write("facts",new LongWritable(e.offset),e,path);

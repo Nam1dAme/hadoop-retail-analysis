@@ -15,6 +15,7 @@ public final class Jobs extends Configured implements Tool {
   public int run(String[] args)throws Exception {
     if(args.length!=3)throw new IllegalArgumentException("stage input output");
     String stage=args[0];Configuration conf=getConf();
+    Event.init(conf);
     int reducers=conf.getInt("behavior.reducers",2);if(reducers<1||reducers>64)throw new IllegalArgumentException("reducers must be 1..64");
     conf.setBoolean("mapreduce.map.output.compress",true);
     conf.set("mapreduce.map.output.compress.codec","org.apache.hadoop.io.compress.DefaultCodec");
