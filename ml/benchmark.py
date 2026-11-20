@@ -70,7 +70,7 @@ def run_benchmark(lease, train, experiment, directory):
         for repeat in range(3):
             resource_guard(device, lease)
             end_to_end = time.monotonic()
-            seed_all()
+            seed_all(deterministic=True)
             model = make_model('GRU').to(device)
             model.head[2] = ComparableDropout()
             optimizer = torch.optim.AdamW(model.parameters(), lr=.001, weight_decay=1e-4)
@@ -93,7 +93,7 @@ def run_benchmark(lease, train, experiment, directory):
             for i in range(20):
                 step(i)
             del optimizer, model
-            seed_all()
+            seed_all(deterministic=True)
             model = make_model('GRU').to(device)
             model.head[2] = ComparableDropout()
             optimizer = torch.optim.AdamW(model.parameters(), lr=.001, weight_decay=1e-4)

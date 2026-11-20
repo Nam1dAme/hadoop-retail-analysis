@@ -39,7 +39,7 @@ def ordered_hash(keys):
 def main():
     started=time.monotonic();work=ROOT/'var/production';models=json.loads((work/'models.json').read_text());source=json.loads((work/'samples.json').read_text())
     assert models['status']=='SUCCEEDED' and models['experiment_id']==source['experiment_id']
-    directory=work/'models'/models['experiment_id'];seed_all()
+    directory=work/'models'/models['experiment_id'];seed_all(deterministic=True)
     with Lease(load(ROOT/'config/development.toml'),ROOT/'var/secrets/writer.cnf') as lease:
         assert Hdfs(lease.config,lease).json(models['archive']+'/manifest.json')==models
         for file in models['outputs']:

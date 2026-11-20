@@ -13,7 +13,7 @@ import numpy as np
 import torch
 from torch.nn import functional as F
 from orchestration.common import ROOT, atomic_json, encode, fingerprint, sha, now, stamp, commit, ManifestError, PipelineError
-from .models import make_model, seed_all, rule_scores, FEATURES, NUMERIC_DIM
+from .models import make_model, seed_all, rule_scores, FEATURES, NUMERIC_DIM, GRU_LAYERS, GRU_HIDDEN
 from . import gbdt as gbdt_module
 from .pipeline import prepared_batches
 from .shards import SPECS, training_groups
@@ -45,8 +45,40 @@ def cpu_state(model):
 def hardware(device):
     return {'device': str(device), 'name': torch.cuda.get_device_name(0) if device.type == 'cuda' else 'CPU',
             'torch': str(torch.__version__), 'cuda_runtime': torch.version.cuda,
-            'cpu_threads': torch.get_num_threads(), 'tf32': False, 'deterministic': True,
+            'cpu_threads': torch.get_num_threads(),
+            'tf32': bool(device.type == 'cuda' and torch.backends.cuda.matmul.allow_tf32),
+            'deterministic': bool(torch.are_deterministic_algorithms_enabled()),
             'total_gpu_mib': torch.cuda.get_device_properties(0).total_memory / 1024 ** 2 if device.type == 'cuda' else None}
+
+
+def amp_config(device):
+    """Return (amp_enabled, amp_dtype, use_scaler, precision_name) for device."""
+    if device.type != 'cuda':
+        return False, torch.float32, False, 'FP32'
+    if torch.cuda.is_bf16_supported():
+        return True, torch.bfloat16, False, 'BF16_AMP'
+    return True, torch.float16, True, 'FP16_AMP'
+
+
+def scaled_learning_rate(base_lr, effective_batch):
+    """Square-root learning-rate scaling relative to the 512 baseline batch size."""
+    return float(base_lr) * math.sqrt(effective_batch / 512.0)
+
+
+def compute_warmup_steps(total_rows, effective_batch):
+    """Linear warmup over ~20% of epoch 1 when effective_batch > 512."""
+    if effective_batch <= 512 or total_rows <= 0:
+        return 0
+    steps_per_epoch = math.ceil(total_rows / effective_batch)
+    return max(1, math.ceil(0.2 * steps_per_epoch))
+
+
+def make_warmup_scheduler(optimizer, warmup_steps):
+    if warmup_steps <= 0:
+        return torch.optim.lr_scheduler.LambdaLR(optimizer, lambda _step: 1.0)
+    return torch.optim.lr_scheduler.LambdaLR(
+        optimizer, lambda step: min(1.0, float(step + 1) / float(warmup_steps))
+    )
 
 
 def resource_usage(device):
@@ -130,10 +162,14 @@ def record_metrics(db, model_id, split, result, evaluation_hash):
                           (model_id, split, cohort, name, values.get(name), values['sample_count'], values['positive_count'], values.get('reason'), evaluation_hash))
 
 
-def backward_group(model, scaler, group, weights, device):
+def backward_group(model, scaler, group, weights, device, *, amp_dtype=None):
     loss_total = None
+    if amp_dtype is None:
+        amp_enabled, amp_dtype, _, _ = amp_config(device)
+    else:
+        amp_enabled = device.type == 'cuda' and amp_dtype in (torch.float16, torch.bfloat16)
     for inputs, weight in zip(group, weights):
-        with torch.autocast(device.type, dtype=torch.float16, enabled=scaler.is_enabled()):
+        with torch.autocast(device.type, dtype=amp_dtype, enabled=amp_enabled):
             logits = model(inputs)
         loss = F.binary_cross_entropy_with_logits(logits.float(), inputs['label'])
         weighted = loss.detach().double() * len(inputs['label'])
@@ -171,8 +207,8 @@ def _probe_batch(train, algorithm, device, seed, micro):
     seed_all(seed)
     model = make_model(algorithm).to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=.001, weight_decay=1e-4)
-    amp = device.type == 'cuda'
-    scaler = torch.amp.GradScaler('cuda', enabled=amp)
+    amp_enabled, amp_dtype, use_scaler, precision_label = amp_config(device)
+    scaler = torch.amp.GradScaler('cuda', enabled=use_scaler)
     columns = (*FEATURES, 'label') if algorithm == 'GRU' else ('numeric', 'label')
     rows = min(micro, max(shard['rows'] for shard in train.manifest['shards']))
     # Reserve for the largest packed shape and both staging slots, including the long-tail bucket.
@@ -194,15 +230,16 @@ def _probe_batch(train, algorithm, device, seed, micro):
         model.gru.register_forward_hook(record('gru_dtype', lambda output: output[1]))
     skipped = 0
     steps = 5
-    batches = prepared_batches((([batch], None) for _ in range(steps)), device, algorithm, prefetch_batches=amp)
+    batches = prepared_batches((([batch], None) for _ in range(steps)), device, algorithm, prefetch_batches=amp_enabled)
     with closing(batches):
         for inputs, _ in batches:
             optimizer.zero_grad(set_to_none=True)
-            backward_group(model, scaler, inputs, [1.], device)
+            backward_group(model, scaler, inputs, [1.], device, amp_dtype=amp_dtype)
             skipped += optimizer_update(model, optimizer, scaler)
-    if skipped == steps or (amp and precision['logits_dtype'] != 'torch.float16'):
+    if skipped == steps or (amp_enabled and precision['logits_dtype'] != str(amp_dtype)):
         raise PipelineError('Preflight did not observe a finite optimizer update with the requested precision')
-    return dict(tested_rows=rows, amp=amp, optimizer_updates=steps - skipped, skipped_updates=skipped,
+    return dict(tested_rows=rows, amp=amp_enabled, precision=precision_label,
+                optimizer_updates=steps - skipped, skipped_updates=skipped,
                 **precision, **resource_usage(device))
 
 
@@ -213,11 +250,7 @@ def preflight(train, algorithm, device, seed=42):
         raise PipelineError('CUDA is unavailable for training preflight')
     if not train.manifest['rows']:
         raise PipelineError('Training requires a nonempty TRAIN split')
-    candidates = (512,)
-    if device.type == 'cuda':
-        # Effective batch stays 512 (the v1 optimizer protocol); length bucketing and prefetch
-        # supply the throughput gain, larger micro batches would change optimization dynamics.
-        candidates = (512, 256, 128, 64, 32)
+    candidates = (4096, 2048, 1024, 512, 256, 128, 64, 32) if device.type == 'cuda' else (512,)
     evidence = []
     for micro in candidates:
         try:
@@ -237,18 +270,26 @@ def preflight(train, algorithm, device, seed=42):
 
 
 def fit(lease, experiment, train, validation, algorithm, learning_rate, directory, sample_hash, seed=42, *, device=None):
-    device = torch.device(device or ('cuda' if algorithm == 'GRU' else 'cpu'))
+    device = torch.device(device or ('cuda' if (algorithm == 'GRU' or torch.cuda.is_available()) else 'cpu'))
     micro, preflight_evidence = preflight(train, algorithm, device, seed)
-    effective_batch = 512
+    effective_batch = 4096 if (algorithm == 'GRU' or device.type == 'cuda') else 512
     bucket_by_length = algorithm == 'GRU'
     prefetch_batches = device.type == 'cuda'
-    identity = dict(schema_version='model-v2', algorithm=algorithm, learning_rate=learning_rate,
+    amp_enabled, amp_dtype, use_scaler, precision_label = amp_config(device)
+    base_lr = float(learning_rate)
+    lr_scaled = scaled_learning_rate(base_lr, effective_batch)
+    warmup_steps = compute_warmup_steps(train.manifest['rows'], effective_batch)
+    identity = dict(schema_version='model-v2', algorithm=algorithm, learning_rate=base_lr,
+                    base_lr=base_lr, scaled_lr=lr_scaled, warmup_steps=warmup_steps,
                     numeric_dim=NUMERIC_DIM, weight_decay=1e-4, seed=seed, effective_batch=effective_batch, micro_batch=micro,
-                    device=str(device), precision='FP16_AMP' if device.type == 'cuda' else 'FP32',
+                    device=str(device), precision=precision_label,
                     bucket_by_length=bucket_by_length, prefetch_batches=prefetch_batches,
                     max_epochs=20, patience=3, selection='VALIDATION_AP', sample_hash=sample_hash,
                     implementation=fingerprint({str(p.relative_to(ROOT)): sha(p) for p in sorted((ROOT/'ml').glob('*.py'))
                                                 if p.name not in ('benchmark.py', 'profile_pipeline.py')}))
+    if algorithm == 'GRU':
+        identity['gru_layers'] = GRU_LAYERS
+        identity['gru_hidden'] = GRU_HIDDEN
     config_hash = fingerprint(identity)
     with lease.db.cursor() as q:
         q.execute('SELECT * FROM model_run WHERE experiment_id=%s AND algorithm=%s AND config_hash=%s',
@@ -267,8 +308,9 @@ def fit(lease, experiment, train, validation, algorithm, learning_rate, director
         local.mkdir(parents=True, exist_ok=True)
         seed_all(seed)
         model = make_model(algorithm).to(device)
-        optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=1e-4)
-        scaler = torch.amp.GradScaler('cuda', enabled=device.type == 'cuda')
+        optimizer = torch.optim.AdamW(model.parameters(), lr=lr_scaled, weight_decay=1e-4)
+        scheduler = make_warmup_scheduler(optimizer, warmup_steps)
+        scaler = torch.amp.GradScaler('cuda', enabled=use_scaler)
         hw = hardware(device)
         if row:
             q.execute('UPDATE model_run SET status=%s,updated_at=%s WHERE model_run_id=%s', ('RUNNING', now(), model_id))
@@ -288,6 +330,8 @@ def fit(lease, experiment, train, validation, algorithm, learning_rate, director
             raise ManifestError('Resume configuration differs')
         model.load_state_dict(checkpoint['model'])
         optimizer.load_state_dict(checkpoint['optimizer'])
+        if 'scheduler' in checkpoint:
+            scheduler.load_state_dict(checkpoint['scheduler'])
         scaler.load_state_dict(checkpoint['scaler'])
         torch.set_rng_state(checkpoint['torch_rng'])
         if device.type == 'cuda':
@@ -314,12 +358,19 @@ def fit(lease, experiment, train, validation, algorithm, learning_rate, director
             skipped = 0
             batches = train_batches(train, device, algorithm, micro, effective_batch, seed, epoch,
                                     bucket_by_length=bucket_by_length, prefetch_batches=prefetch_batches)
+            last_guard = 0.0
             with closing(batches):
                 for index, (group, (weights, count)) in enumerate(batches):
-                    resource_guard(device, lease)
+                    now_mono = time.monotonic()
+                    if now_mono - last_guard >= 5.0:
+                        resource_guard(device, lease)
+                        last_guard = now_mono
                     optimizer.zero_grad(set_to_none=True)
-                    loss_total += backward_group(model, scaler, group, weights, device)
-                    skipped += optimizer_update(model, optimizer, scaler)
+                    loss_total += backward_group(model, scaler, group, weights, device, amp_dtype=amp_dtype)
+                    step_skipped = optimizer_update(model, optimizer, scaler)
+                    skipped += step_skipped
+                    if not step_skipped:
+                        scheduler.step()
                     total += count
                     if index % 200 == 0:
                         atomic_json(local/'progress.json', dict(status='RUNNING', algorithm=algorithm, epoch=epoch, samples=total,
@@ -351,7 +402,7 @@ def fit(lease, experiment, train, validation, algorithm, learning_rate, director
             elapsed = elapsed_before + time.monotonic()-started
             numpy_rng = np.random.get_state()
             resume_hash = save_checkpoint(resume_path, dict(model=cpu_state(model), optimizer=optimizer.state_dict(),
-                         scaler=scaler.state_dict(), torch_rng=torch.get_rng_state(),
+                         scheduler=scheduler.state_dict(), scaler=scaler.state_dict(), torch_rng=torch.get_rng_state(),
                          cuda_rng=torch.cuda.get_rng_state_all() if device.type == 'cuda' else [],
                          python_rng=random.getstate(), numpy_rng=(numpy_rng[0], numpy_rng[1].tolist(), *numpy_rng[2:]),
                          config_hash=config_hash, epoch=epoch, history=history,
