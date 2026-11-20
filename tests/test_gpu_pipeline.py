@@ -68,7 +68,7 @@ def test_same_seed_has_bitwise_identical_weights_and_scores(synthetic_train, tmp
     device = torch.device(device_name)
 
     def run(repeat):
-        seed_all(43)
+        seed_all(43, deterministic=True)
         model = make_model(algorithm).to(device)
         optimizer = torch.optim.AdamW(model.parameters(), lr=.001, weight_decay=1e-4)
         scaler = torch.amp.GradScaler('cuda', enabled=device.type == 'cuda')
@@ -97,7 +97,7 @@ def test_same_seed_has_bitwise_identical_weights_and_scores(synthetic_train, tmp
 @pytest.mark.parametrize('device_name', DEVICES)
 def test_optimized_fp32_score_matches_legacy_checkpoint(synthetic_train, tmp_path, algorithm, device_name):
     device = torch.device(device_name)
-    seed_all()
+    seed_all(deterministic=True)
     checkpoint = tmp_path/'checkpoint.pt'
     digest = save_checkpoint(checkpoint, make_model(algorithm).state_dict())
     model = make_model(algorithm).to(device).eval()
@@ -126,6 +126,22 @@ def test_optimized_fp32_score_matches_legacy_checkpoint(synthetic_train, tmp_pat
 def test_gru_cuda_preflight_observes_amp_and_finite_update(synthetic_train):
     _, evidence = preflight(synthetic_train, 'GRU', torch.device('cuda'))
     accepted = evidence[-1]
-    assert accepted['amp'] and accepted['logits_dtype'] == 'torch.float16'
-    assert accepted['gru_dtype'] == 'torch.float16'
+    expected_dtype = 'torch.bfloat16' if torch.cuda.is_bf16_supported() else 'torch.float16'
+    assert evidence[0]['micro_batch'] == 4096
+    assert accepted['amp'] and accepted['logits_dtype'] == expected_dtype
+    assert accepted['gru_dtype'] in ('torch.float16', 'torch.bfloat16')
     assert accepted['optimizer_updates'] > 0
+
+
+def test_multiworker_prefetch_preserves_order_under_jitter():
+    import time
+    items = list(range(24))
+
+    def prepare(item, slot):
+        time.sleep(((24 - item) % 5) * 0.002)
+        return item, slot
+
+    with closing(prefetch(items, prepare, max_workers=3, buffer_size=8)) as stream:
+        results = list(stream)
+    assert [item for item, _ in results] == items
+    assert all(0 <= slot < 8 for _, slot in results)
