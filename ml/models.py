@@ -8,6 +8,8 @@ from torch import nn
 
 FEATURES = ('category', 'behavior', 'hour', 'gap', 'numeric', 'length')
 NUMERIC_DIM = 20
+GRU_LAYERS = 2
+GRU_HIDDEN = 128
 INPUT_DTYPES = {'category': torch.int32, 'behavior': torch.int32, 'hour': torch.int32, 'length': torch.int64}
 # Raw (de-standardized) numeric dimensions for the RULE baseline: 48h cart/buy/fav and log1p(uncarted-bought items).
 RULE_DIMS = (10, 9, 11, 18)
@@ -31,18 +33,18 @@ def rule_scores(numeric, rule, mean=None, std=None):
     return values[rule_group_codes(numeric, mean, std)]
 
 
-def seed_all(seed=42):
+def seed_all(seed=42, deterministic=False):
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
     torch.set_num_threads(4)
-    torch.use_deterministic_algorithms(True)
-    torch.backends.cudnn.benchmark = False
-    torch.backends.cudnn.deterministic = True
-    torch.backends.cuda.matmul.allow_tf32 = False
-    torch.backends.cudnn.allow_tf32 = False
+    torch.use_deterministic_algorithms(deterministic)
+    torch.backends.cudnn.benchmark = not deterministic
+    torch.backends.cudnn.deterministic = deterministic
+    torch.backends.cuda.matmul.allow_tf32 = not deterministic
+    torch.backends.cudnn.allow_tf32 = not deterministic
 
 
 class Logistic(nn.Module):
@@ -55,14 +57,17 @@ class Logistic(nn.Module):
 
 
 class BehaviorGRU(nn.Module):
-    def __init__(self):
+    def __init__(self, hidden_size=GRU_HIDDEN, num_layers=GRU_LAYERS, dropout=0.1):
         super().__init__()
+        self.hidden_size = hidden_size
+        self.num_layers = num_layers
         self.category = nn.Embedding(16385, 16, padding_idx=0)
         self.behavior = nn.Embedding(5, 8, padding_idx=0)
         self.hour = nn.Embedding(25, 4, padding_idx=0)
-        self.project = nn.Sequential(nn.Linear(29, 64), nn.ReLU())
-        self.gru = nn.GRU(64, 64, batch_first=True)
-        self.head = nn.Sequential(nn.Linear(64 + NUMERIC_DIM, 32), nn.ReLU(), nn.Dropout(.1), nn.Linear(32, 1))
+        self.project = nn.Sequential(nn.Linear(29, hidden_size), nn.LayerNorm(hidden_size), nn.ReLU())
+        self.gru = nn.GRU(hidden_size, hidden_size, num_layers=num_layers, batch_first=True,
+                          dropout=dropout if num_layers > 1 else 0.0)
+        self.head = nn.Sequential(nn.Linear(hidden_size + NUMERIC_DIM, 64), nn.ReLU(), nn.Dropout(dropout), nn.Linear(64, 1))
 
     def forward(self, batch):
         lengths = batch['length'].cpu()
@@ -77,7 +82,7 @@ class BehaviorGRU(nn.Module):
         )
         # Packed GRU stops at each sample's true length, so final hidden state ignores all PADs.
         _, hidden = self.gru(packed)
-        last = hidden.squeeze(0)
+        last = hidden[-1]
         return self.head(torch.cat((last, batch['numeric']), dim=-1)).squeeze(-1)
 
 
