@@ -44,6 +44,19 @@ python scripts/web-service.py stop
 python scripts/retention-plan.py
 ```
 
+## 脚本索引
+
+`scripts/` 中的脚本分为四类。验收类脚本没有被其他代码直接调用，但它们产出的 `var/production/*-verification.json` 会被 `audit-delivery.py` 与 `publication/backup.py` 读取，因此不是死代码，不要删除。
+
+| 类别 | 脚本 | 用途 |
+|---|---|---|
+| 环境 | `dev-env.sh`、`bootstrap-tools.py`、`check-environment.py`、`freeze-environment.py`、`check-hadoop.sh`、`check-host-storage.ps1` | 加载环境、安装锁定工具、环境探针与冻结 |
+| 服务 | `database-service.py`、`hadoop-service.sh`、`web-service.py`、`setup-loader.py`、`setup-test-database.py` | 私有 MariaDB/Hadoop/Web 启停与账号权限 |
+| 生产流程 | `behaviorctl`、`build-jobs.sh`、`test-jobs.sh`、`train-models.py`、`publish-results.py`、`backup-release.py`、`restore-backup.py`、`retention-plan.py` | 摄取→流水线→训练→发布→备份/恢复，保留计划只读 |
+| 发布后验收 | `verify-models.py`、`verify-release.py`、`verify-api.py`、`verify-entity-ranking.py`、`verify-model-page.py`、`verify-browser.py`、`verify-ui-interactions.py`、`load-test-api.py`、`monitor-resources.py`、`audit-delivery.py` | 逐条核对模型/预测/API/排行/前端，最后由 `audit-delivery.py` 汇总证据 |
+| 规模基准 | `setup-scale.py`、`run-scale.py` | 1M/10M/全量 YARN 规模测试，隔离于生产 |
+| 资源 | `subset-ui-fonts.py` | 重建前端字体子集 |
+
 ## 提交规范（源自 AGENTS.md）
 
 - 使用 Conventional Commits：`type(scope): 中文描述`（例如 `fix(scripts): 修复环境变量未加载时的 Python 路径回退`）。

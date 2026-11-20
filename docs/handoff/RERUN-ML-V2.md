@@ -44,6 +44,12 @@ scripts/behaviorctl --baseline UBA-DOC-1.0.0 prepare-samples --batch-id $B > /tm
 .venv/bin/python scripts/publish-results.py forecast
 .venv/bin/python scripts/publish-results.py publish
 .venv/bin/python scripts/verify-release.py
+
+# 6. 发布后验收（需先 python scripts/web-service.py start）
+.venv/bin/python scripts/verify-api.py
+.venv/bin/python scripts/verify-entity-ranking.py
+.venv/bin/python scripts/verify-model-page.py
+.venv/bin/python scripts/audit-delivery.py
 ```
 
 ## 验收要点
