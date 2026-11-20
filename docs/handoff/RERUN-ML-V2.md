@@ -34,6 +34,7 @@ scripts/hadoop-service.sh start
 B=1c577aba-46f2-4710-b296-5f29ac842921
 
 # 1. 迁移，先备份。必须用 migrator 凭据；默认的 writer 没有 CREATE 权限
+#    需确保 009/010/011 全部应用（011 扩展 prediction 主键以支持双日 TEST）
 scripts/behaviorctl --baseline UBA-DOC-1.0.0 --credentials var/secrets/migrator.cnf migrate --backup
 
 # 2. J01..J06 + Q01/A01 审计
