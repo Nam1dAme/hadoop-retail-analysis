@@ -1,8 +1,7 @@
-"""Reference-protected retention planning and optional deletion execution."""
+"""Read-only, reference-protected retention planning. This module never deletes data."""
 from datetime import timedelta
 import json
 from pathlib import Path, PurePosixPath
-import shutil
 from orchestration.common import ROOT, now, stamp, ManifestError
 from orchestration.storage import Hdfs
 
@@ -23,12 +22,13 @@ def _entry_bytes(path):
     return sum(f.stat().st_size for f in p.rglob('*') if f.is_file())
 
 
-def _scan_hdfs_tmp(config, active_runs, protected, candidates, blocked):
+def _scan_hdfs_tmp(config, active_runs, protected, candidates, blocked, errors):
     hdfs_root = config['hdfs']['root']
     try:
         storage = Hdfs(config)
         out = storage.command('-find', hdfs_root, '-name', '*.tmp').stdout.decode('utf-8', errors='replace')
-    except Exception:
+    except Exception as exc:
+        errors.append(dict(kind='hdfs', scope=hdfs_root, error=str(exc)))
         return
     seen = {c['path'] for c in candidates} | {b['path'] for b in blocked}
     for line in out.splitlines():
@@ -112,35 +112,12 @@ def _scan_local_bloat(protected, model_runs, candidates, blocked):
                             ))
 
 
-def _execute_deletions(config, candidates):
-    deleted = []
-    errors = []
-    storage = None
-    for item in candidates:
-        path = item['path']
-        kind = item.get('kind', 'hdfs')
-        try:
-            if kind == 'local':
-                p = Path(path)
-                if p.is_dir():
-                    shutil.rmtree(p)
-                elif p.exists() or p.is_symlink():
-                    p.unlink(missing_ok=True)
-            else:
-                if storage is None:
-                    storage = Hdfs(config)
-                storage.command('-rm', '-r', '-skipTrash', path)
-            deleted.append(path)
-        except Exception as exc:
-            errors.append(dict(path=path, kind=kind, error=str(exc)))
-    return deleted, errors
-
-
-def plan(db, config, apply=False, dry_run=True):
-    execute = bool(apply) or (not dry_run)
+def plan(db, config):
+    """只读计划：分类可清理候选与受保护引用，不提供也不执行任何删除。"""
     protected = {config['source']['path']}
     candidates = []
     blocked = []
+    errors = []
     active_runs = set()
     model_runs = []
     with db.cursor() as q:
@@ -192,25 +169,20 @@ def plan(db, config, apply=False, dry_run=True):
             blocked.append(dict(path=temporary, kind='hdfs', reason='referenced or active'))
         else:
             candidates.append(dict(path=temporary, kind='hdfs', run_id=task['run_id'], reason='failed temporary older than seven days'))
-    _scan_hdfs_tmp(config, active_runs, protected, candidates, blocked)
+    _scan_hdfs_tmp(config, active_runs, protected, candidates, blocked, errors)
     _scan_local_bloat(protected, model_runs, candidates, blocked)
-    deleted = []
-    errors = []
-    if execute and candidates:
-        deleted, errors = _execute_deletions(config, candidates)
     return dict(
         status='PASS',
-        mode='APPLY' if execute else 'DRY_RUN',
-        dry_run=not execute,
-        deletion_authorized=execute,
+        mode='DRY_RUN',
+        dry_run=True,
+        deletion_authorized=False,
         current_release_id=current,
         retained_release_ids=[r['release_id'] for r in releases],
         protected_roots=sorted(protected),
         candidates=candidates,
         blocked=blocked,
-        deleted=deleted,
         errors=errors,
         unique_source_reclaim_allowed=False,
-        policy='Keep all READY/STAGING dependencies; recheck live tasks and references before any future deletion.',
+        policy='Read-only plan; keep all READY/STAGING dependencies and recheck live tasks before any future deletion.',
         observed_at=stamp(),
     )

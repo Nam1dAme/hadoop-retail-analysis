@@ -25,6 +25,14 @@ class DigestReader:
 
 
 def make_backup(lease,keep_last=1):
+    """失败时也写入明确状态，避免 var/production/backup.json 停留在 RUNNING。"""
+    try:
+        return _make_backup(lease,keep_last)
+    except BaseException:
+        atomic_json(ROOT/'var/production/backup.json',dict(status='FAILED',failed_at=stamp(),independent_backup_verified=False))
+        raise
+
+def _make_backup(lease,keep_last=1):
     started=time.monotonic()
     atomic_json(ROOT/'var/production/backup.json',dict(status='RUNNING',started_at=stamp(),independent_backup_verified=False))
     prepare_offline_checks(lease.db)
@@ -35,7 +43,8 @@ def make_backup(lease,keep_last=1):
     with lease.db.cursor() as q:
         q.execute("SELECT * FROM data_release WHERE release_id=%s AND status='READY'",(release['release_id'],));row=q.fetchone()
         if not row:raise ManifestError('Backup requires a published READY release')
-        q.execute("SELECT status FROM task_run WHERE status IN ('RUNNING','PENDING')");assert not q.fetchall()
+        q.execute("SELECT status FROM task_run WHERE status IN ('RUNNING','PENDING')")
+        if q.fetchall():raise ManifestError('Backup requires no RUNNING or PENDING tasks')
         q.execute("SELECT output_path FROM task_run WHERE batch_id=%s AND status='SUCCEEDED'",(row['batch_id'],));roots=[x['output_path'] for x in q.fetchall()]
         q.execute('SHOW TABLES');tables=[next(iter(x.values())) for x in q.fetchall()]
         table_counts={}
