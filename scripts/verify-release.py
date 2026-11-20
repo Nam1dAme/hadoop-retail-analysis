@@ -30,16 +30,17 @@ def expected_rows(cache,scores,directory):
             user=ids[positions[i]:positions[i+1]];data['user'][i]=user
             assert hashlib.sha256(user+b'|'+str(int(asof[i])).encode()).hexdigest().encode()==keys[i]
         data['score']=part['score'];data['label']=label;data['history']=history;data['key']=keys;data['asof']=asof
-        data.sort(order='user');path=directory/f'{len(runs):04}.npy';np.save(path,data,allow_pickle=False)
+        data.sort(order=('user','asof'));path=directory/f'{len(runs):04}.npy';np.save(path,data,allow_pickle=False)
         runs.append(np.load(path,mmap_mode='r',allow_pickle=False));offset+=n
     assert offset==len(prediction)
-    heap=[(bytes(run[0]['user']),i,0) for i,run in enumerate(runs) if len(run)];heapq.heapify(heap)
+    heap=[(bytes(run[0]['user']),int(run[0]['asof']),i,0) for i,run in enumerate(runs) if len(run)];heapq.heapify(heap)
     previous=None
     while heap:
-        user,run,index=heapq.heappop(heap)
-        assert previous is None or user>previous,'Duplicate sample user in one prediction window'
-        previous=user;yield runs[run][index];index+=1
-        if index<len(runs[run]):heapq.heappush(heap,(bytes(runs[run][index]['user']),run,index))
+        user,asof_val,run,index=heapq.heappop(heap)
+        key=(user,asof_val)
+        assert previous is None or key>previous,'Duplicate sample (user, as_of) in one prediction window'
+        previous=key;yield runs[run][index];index+=1
+        if index<len(runs[run]):heapq.heappush(heap,(bytes(runs[run][index]['user']),int(runs[run][index]['asof']),run,index))
 
 def main():
     started=time.monotonic();work=ROOT/'var/production';release=json.loads((work/'release.json').read_text());models=json.loads((work/'models.json').read_text())
@@ -57,7 +58,7 @@ def main():
                 expected=expected_rows(Path(samples['samples']['cache_path'])/mode,path,Path(directory))
                 count=0
                 with db.cursor(pymysql.cursors.SSCursor) as q:
-                    q.execute('SELECT user_id,score,label,history_event_count,sample_key,UNIX_TIMESTAMP(as_of),UNIX_TIMESTAMP(window_end),predicted_positive FROM prediction WHERE release_id=%s AND mode=%s AND model_run_id=%s ORDER BY user_id',
+                    q.execute('SELECT user_id,score,label,history_event_count,sample_key,UNIX_TIMESTAMP(as_of),UNIX_TIMESTAMP(window_end),predicted_positive FROM prediction WHERE release_id=%s AND mode=%s AND model_run_id=%s ORDER BY user_id,as_of',
                               (release['release_id'],mode,model))
                     for row in q:
                         item=next(expected)
