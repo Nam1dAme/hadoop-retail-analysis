@@ -188,7 +188,7 @@ def predictions(api, release):
             [r['model_run_id'] for r in models],
             format_func=lambda v: next(r['algorithm'] for r in models if r['model_run_id'] == v),
         )
-        st.caption(f'历史测试目标窗口为北京时间 {window_end-timedelta(days=2)} 全天。模型与阈值在查看测试结果前已固定。')
+        st.caption(f'历史测试目标窗口为北京时间 {window_end-timedelta(days=2)} 至 {window_end-timedelta(days=1)} 全天。模型与阈值在查看测试结果前已固定。')
     with st.form('prediction_filter', border=False):
         user = st.text_input('用户 ID（留空查看分数排行）')
         submit = st.form_submit_button('应用查询', type='primary')
