@@ -11,7 +11,7 @@ import numpy as np
 import torch
 from torch.nn import functional as F
 from orchestration.common import ROOT, atomic_json, encode, fingerprint, sha, now, stamp, commit, ManifestError, PipelineError
-from .models import make_model, seed_all, tensors, FEATURES
+from .models import make_model, seed_all, tensors, rule_scores, FEATURES, NUMERIC_DIM
 from .shards import ShardDataset, training_groups
 from .metrics import SCORE_DTYPE, evaluate_file, choose_threshold
 
@@ -59,14 +59,14 @@ def resource_guard(device, lease=None):
         raise PipelineError('Training resource budget exceeded: ' + encode(usage))
 
 
-def score(dataset, model, device, algorithm, output, batch_size=512, rate=None, lease=None):
+def score(dataset, model, device, algorithm, output, batch_size=512, rate=None, lease=None, rule=None):
     """Write exactly one score per sample in immutable input order; evaluation is FP32."""
     output = Path(output)
     temporary = output.with_suffix('.tmp.npy')
     prediction = np.lib.format.open_memmap(temporary, mode='w+', dtype=SCORE_DTYPE,
                                          shape=(dataset.manifest['rows'],))
-    columns = ('numeric',) if algorithm == 'LOGISTIC' else FEATURES if algorithm == 'GRU' else ()
-    columns = (*columns, 'label', 'cohort', 'sample_key')
+    columns = ('numeric',) if algorithm in ('LOGISTIC', 'RULE') else FEATURES if algorithm == 'GRU' else ()
+    columns = (*columns, 'label', 'cohort', 'sample_key', 'as_of')
     if model is not None:
         model.eval()
     offset = 0
@@ -76,6 +76,10 @@ def score(dataset, model, device, algorithm, output, batch_size=512, rate=None, 
             resource_guard(device, lease)
             if algorithm == 'CONSTANT':
                 values = np.full(len(batch['label']), rate, dtype=np.float64)
+            elif algorithm == 'RULE':
+                if rule is None:
+                    raise ManifestError('RULE scoring requires the frozen rule table')
+                values = rule_scores(batch['numeric'], rule)
             else:
                 inputs = tensors(batch, device, algorithm)
                 values = torch.sigmoid(model(inputs).float()).cpu().numpy().astype(np.float64)
@@ -83,7 +87,7 @@ def score(dataset, model, device, algorithm, output, batch_size=512, rate=None, 
                 raise PipelineError('Non-finite model scores')
             end = offset + len(values)
             prediction['score'][offset:end] = values
-            for key in ('label', 'cohort', 'sample_key'):
+            for key in ('label', 'cohort', 'sample_key', 'as_of'):
                 prediction[key][offset:end] = batch[key]
             for key in batch['sample_key']:
                 digest.update(bytes(key) + b'\n')
@@ -98,13 +102,17 @@ def score(dataset, model, device, algorithm, output, batch_size=512, rate=None, 
 
 def record_metrics(db, model_id, split, result, evaluation_hash):
     with db.cursor() as q:
+        names = ('ap', 'roc_auc', 'logloss', 'brier', 'precision', 'recall', 'f1', 'tp', 'fp', 'fn', 'tn',
+                 *(f'{kind}_at_{suffix}' for kind in ('precision', 'recall', 'lift') for suffix in ('1pct', '5pct', '10pct')))
+        if max(len(name) for name in names) > 32 or any(len(cohort) > 32 for cohort in result):
+            raise ManifestError('Metric dimension exceeds VARCHAR(32)')
         for cohort, values in result.items():
-            for name in ('ap', 'roc_auc', 'logloss', 'brier', 'precision', 'recall', 'f1', 'tp', 'fp', 'fn', 'tn'):
+            for name in names:
                 q.execute('INSERT INTO model_metric VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s) ON DUPLICATE KEY UPDATE value=VALUES(value),sample_count=VALUES(sample_count),positive_count=VALUES(positive_count),reason=VALUES(reason),evaluation_hash=VALUES(evaluation_hash)',
                           (model_id, split, cohort, name, values.get(name), values['sample_count'], values['positive_count'], values.get('reason'), evaluation_hash))
 
 
-def preflight(train, algorithm, device):
+def preflight(train, algorithm, device, seed=42):
     if algorithm == 'GRU' and device.type != 'cuda':
         raise PipelineError('Formal GRU training requires CUDA')
     candidates = (1024, 512, 256, 128, 64, 32) if device.type == 'cuda' else (256,)
@@ -112,7 +120,7 @@ def preflight(train, algorithm, device):
     for micro in candidates:
         model = optimizer = inputs = loss = None
         try:
-            seed_all()
+            seed_all(seed)
             if device.type == 'cuda':
                 torch.cuda.empty_cache()
                 torch.cuda.reset_peak_memory_stats()
@@ -148,13 +156,13 @@ def preflight(train, algorithm, device):
     raise PipelineError('Training preflight failed at minimum batch: ' + encode(evidence))
 
 
-def fit(lease, experiment, train, validation, algorithm, learning_rate, directory, sample_hash):
+def fit(lease, experiment, train, validation, algorithm, learning_rate, directory, sample_hash, seed=42):
     device = torch.device('cuda' if algorithm == 'GRU' else 'cpu')
-    micro, preflight_evidence = preflight(train, algorithm, device)
+    micro, preflight_evidence = preflight(train, algorithm, device, seed)
     effective_batch = max(512, micro)
-    identity = dict(schema_version='model-v1', algorithm=algorithm, learning_rate=learning_rate,
-                    weight_decay=1e-4, seed=42, effective_batch=effective_batch, micro_batch=micro,
-                    max_epochs=10, patience=2, selection='VALIDATION_AP', sample_hash=sample_hash,
+    identity = dict(schema_version='model-v2', algorithm=algorithm, learning_rate=learning_rate,
+                    numeric_dim=NUMERIC_DIM, weight_decay=1e-4, seed=seed, effective_batch=effective_batch, micro_batch=micro,
+                    max_epochs=20, patience=3, selection='VALIDATION_AP', sample_hash=sample_hash,
                     implementation=fingerprint({str(p.relative_to(ROOT)): sha(p) for p in sorted((ROOT/'ml').glob('*.py')) if p.name != 'benchmark.py'}))
     config_hash = fingerprint(identity)
     with lease.db.cursor() as q:
@@ -172,7 +180,7 @@ def fit(lease, experiment, train, validation, algorithm, learning_rate, director
         model_id = row['model_run_id'] if row else str(uuid.uuid4())
         local = Path(directory)/model_id
         local.mkdir(parents=True, exist_ok=True)
-        seed_all()
+        seed_all(seed)
         model = make_model(algorithm).to(device)
         optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=1e-4)
         scaler = torch.amp.GradScaler('cuda', enabled=device.type == 'cuda')
@@ -180,8 +188,8 @@ def fit(lease, experiment, train, validation, algorithm, learning_rate, director
         if row:
             q.execute('UPDATE model_run SET status=%s,updated_at=%s WHERE model_run_id=%s', ('RUNNING', now(), model_id))
         else:
-            q.execute('INSERT INTO model_run(model_run_id,experiment_id,algorithm,status,seed,config_hash,config_json,device,parameter_count,hardware_json,created_at,updated_at) VALUES(%s,%s,%s,%s,42,%s,%s,%s,%s,%s,%s,%s)',
-                      (model_id, experiment, algorithm, 'RUNNING', config_hash, encode(identity), str(device), sum(p.numel() for p in model.parameters()), encode(hw), now(), now()))
+            q.execute('INSERT INTO model_run(model_run_id,experiment_id,algorithm,status,seed,config_hash,config_json,device,parameter_count,hardware_json,created_at,updated_at) VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)',
+                      (model_id, experiment, algorithm, 'RUNNING', seed, config_hash, encode(identity), str(device), sum(p.numel() for p in model.parameters()), encode(hw), now(), now()))
     atomic_json(local/'config.json', identity)
     atomic_json(local/'preflight.json', preflight_evidence)
     history = []
@@ -215,8 +223,8 @@ def fit(lease, experiment, train, validation, algorithm, learning_rate, director
     if device.type == 'cuda':
         torch.cuda.reset_peak_memory_stats()
     try:
-        for epoch in range(first_epoch, 11):
-            if stale >= 2:
+        for epoch in range(first_epoch, identity['max_epochs'] + 1):
+            if stale >= identity['patience']:
                 break
             epoch_started = time.monotonic()
             model.train()

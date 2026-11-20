@@ -7,12 +7,15 @@ from pathlib import Path
 import platform
 import resource
 import subprocess
+import sys
 import tempfile
 from datetime import datetime,timezone
 import pymysql
 import torch
 
 ROOT=Path(__file__).resolve().parents[1]
+sys.path.insert(0,str(ROOT))
+from ml.models import NUMERIC_DIM
 assert platform.python_version_tuple()[:2]==('3','12')
 java=subprocess.check_output([str(ROOT/'var/tools/java11/bin/java'),'-version'],stderr=subprocess.STDOUT,text=True).splitlines()[0]
 assert '11.0.' in java
@@ -42,14 +45,14 @@ class Probe(torch.nn.Module):
         self.hour=torch.nn.Embedding(25,4,padding_idx=0)
         self.proj=torch.nn.Linear(29,64)
         self.gru=torch.nn.GRU(64,64,batch_first=True)
-        self.head=torch.nn.Sequential(torch.nn.Linear(78,32),torch.nn.ReLU(),torch.nn.Dropout(.1),torch.nn.Linear(32,1))
+        self.head=torch.nn.Sequential(torch.nn.Linear(64+NUMERIC_DIM,32),torch.nn.ReLU(),torch.nn.Dropout(.1),torch.nn.Linear(32,1))
     def forward(self,c,b,h,g,n):
         x=torch.cat([self.cat(c),self.behavior(b),self.hour(h),g],dim=-1)
         x,_=self.gru(torch.relu(self.proj(x)))
         return self.head(torch.cat([x[:,-1],n],dim=-1)).squeeze(-1)
 m=Probe().cuda();opt=torch.optim.AdamW(m.parameters(),lr=.001)
 x=(torch.randint(1,16385,(32,128),device='cuda'),torch.randint(1,5,(32,128),device='cuda'),
-   torch.randint(1,25,(32,128),device='cuda'),torch.rand(32,128,1,device='cuda'),torch.randn(32,14,device='cuda'))
+   torch.randint(1,25,(32,128),device='cuda'),torch.rand(32,128,1,device='cuda'),torch.randn(32,NUMERIC_DIM,device='cuda'))
 y=torch.arange(32,device='cuda')%2
 losses=[]
 for amp in [False,True]:

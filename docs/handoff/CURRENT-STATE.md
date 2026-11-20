@@ -11,7 +11,7 @@
 ## 核心不变量（修改代码时必须遵守）
 
 1. **基线与版本标识**：
-   - `baseline_version = "UBA-DOC-1.0.0"`、`policy_version = "behavior-v1"`、`split_version = "daily-48h-24h-v1"`。
+   - `baseline_version = "UBA-DOC-1.0.0"`、`policy_version = "behavior-v1"`、`split_version = "daily-48h-24h-v2"`。
    - 任何涉及 `orchestration/`、`ingest/`、`ml/` 的代码改动都会改变 `implementation_fingerprint()`，正式产物必须记录真实 `git rev-parse HEAD`。
 2. **三重隔离约束（Three-Way Isolation）**：
    - 合成测试或压测配置（`synthetic = true` 或 `benchmark = true`）**必须**同时隔离数据库名（非 `behavior_analytics`）、HDFS 根目录（非 `/behavior/v1`）与本地 `work_dir`（非 `var/production`），否则 `orchestration.common.load()` 会拒绝加载。

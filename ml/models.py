@@ -7,6 +7,27 @@ import torch
 from torch import nn
 
 FEATURES = ('category', 'behavior', 'hour', 'gap', 'numeric', 'length')
+NUMERIC_DIM = 20
+# Raw (de-standardized) numeric dimensions for the RULE baseline: 48h cart/buy/fav and log1p(uncarted-bought items).
+RULE_DIMS = (10, 9, 11, 18)
+
+
+def rule_group_codes(numeric, mean, std):
+    """Map standardized numeric rows to 16 groups (cart,buy,fav,other as 8/4/2/1 bits)."""
+    raw = np.asarray(numeric, dtype=np.float64) * np.asarray(std, dtype=np.float64) + np.asarray(mean, dtype=np.float64)
+    # log1p(count) is 0 for count=0 and >=log(2) otherwise; a midpoint threshold absorbs float32 round-trip error.
+    signals = raw[:, RULE_DIMS] > 0.5 * np.log(2.0)
+    return (signals[:, 0].astype(np.int64) * 8 + signals[:, 1].astype(np.int64) * 4 +
+            signals[:, 2].astype(np.int64) * 2 + signals[:, 3].astype(np.int64))
+
+
+def rule_scores(numeric, rule, mean=None, std=None):
+    """Look up the TRAIN group rate for each sample; rule is {'table': {'0000': rate, ...}}."""
+    table = rule['table'] if isinstance(rule, dict) and 'table' in rule else rule
+    if mean is None or std is None:
+        mean, std = rule['mean'], rule['std']
+    values = np.asarray([table[f'{code:04b}'] for code in range(16)], dtype=np.float64)
+    return values[rule_group_codes(numeric, mean, std)]
 
 
 def seed_all(seed=42):
@@ -26,7 +47,7 @@ def seed_all(seed=42):
 class Logistic(nn.Module):
     def __init__(self):
         super().__init__()
-        self.linear = nn.Linear(14, 1)
+        self.linear = nn.Linear(NUMERIC_DIM, 1)
 
     def forward(self, batch):
         return self.linear(batch['numeric']).squeeze(-1)
@@ -40,7 +61,7 @@ class BehaviorGRU(nn.Module):
         self.hour = nn.Embedding(25, 4, padding_idx=0)
         self.project = nn.Sequential(nn.Linear(29, 64), nn.ReLU())
         self.gru = nn.GRU(64, 64, batch_first=True)
-        self.head = nn.Sequential(nn.Linear(78, 32), nn.ReLU(), nn.Dropout(.1), nn.Linear(32, 1))
+        self.head = nn.Sequential(nn.Linear(64 + NUMERIC_DIM, 32), nn.ReLU(), nn.Dropout(.1), nn.Linear(32, 1))
 
     def forward(self, batch):
         max_len = int(batch['length'].max().item())

@@ -22,7 +22,7 @@ def _forecast_window(lease,sample,data):
         dt=datetime.fromtimestamp(ts,timezone.utc)
         as_of=dt.strftime('%Y-%m-%dT%H:%M:%SZ')
         window_end=window_end or (dt+timedelta(days=1)).strftime('%Y-%m-%dT%H:%M:%SZ')
-    as_of=as_of or '2017-12-03T16:00:00Z'
+    if not as_of:raise ManifestError('Cannot determine forecast as_of from the sample shards or configuration')
     if not window_end:
         dt=datetime.fromisoformat(as_of.replace('Z','+00:00'))
         window_end=(dt+timedelta(days=1)).strftime('%Y-%m-%dT%H:%M:%SZ')
@@ -44,10 +44,12 @@ def forecast(lease,index=None):
     def produce(storage,temp,work,run):
         started=time.monotonic();data=ShardDataset(Path(sample['samples']['cache_path'])/'FORECAST',verify=True)
         model=None
-        if algorithm!='CONSTANT':
+        if algorithm in ('LOGISTIC','GRU'):
             model=make_model(algorithm).to(device)
             model.load_state_dict(trusted_load(selected['checkpoint_path'],selected['checkpoint_hash'],ROOT/'var/production/models'))
-        scores=score(data,model,device,algorithm,local/'forecast.npy',rate=selected['config'].get('rate'),lease=lease)
+        rule=selected['config'].get('rule') if algorithm=='RULE' else None
+        if algorithm=='RULE' and not rule:raise ManifestError('RULE forecast requires the frozen rule table')
+        scores=score(data,model,device,algorithm,local/'forecast.npy',rate=selected['config'].get('rate'),rule=rule,lease=lease)
         import numpy as np
         arr=np.load(local/'forecast.npy',mmap_mode='r',allow_pickle=False)
         if not (arr['label']==-1).all() or len(arr)!=sample['samples']['splits']['FORECAST']['rows']:

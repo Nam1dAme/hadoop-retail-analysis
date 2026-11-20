@@ -11,7 +11,7 @@ UBA-DOC-1.0.0 / FROZEN。以下是未来实现协议，不表示命令已经存�
 | J02 | facts→profile | 五字段键归组计重复候选；分别按user/item/category去重计基数，多作业子ID独立登记；不在driver建集合 |
 | J03 | scope facts→event_cube/entity_daily | 日/小时/type及日/entity/type键计数；Combiner仅加法；热点键可先按source_offset hash盐分16路，再去盐汇总 |
 | J04 | scope facts→user_daily/user_masks/range_summary | user,date二级排序，单用户流式计四行为与小时位图；9日bitmask计算45种连续日期范围的UV与pv∩buy；另算日首次出现与D/D+1复访 |
-| J05 | scope facts→raw_samples | partition=user；sort=(user,ts,source,offset)；group=user；按固定7个锚点维护有界状态，输出TRAIN4+VAL1+TEST1+FORECAST1 |
+| J05 | scope facts→raw_samples | partition=user；sort=(user,ts,source,offset)；group=user；按固定8个锚点维护有界状态，输出TRAIN4+VAL1+TEST2+FORECAST1 |
 | J06 | TRAIN raw_samples→normalization | 各14维sum/sumsq/count双精度合并，方差负的舍入误差钳0；不读VAL/TEST统计 |
 | E01 | raw_samples+normalization→local shards+HDFS archive | 流式标准化与固定形状分片；TRAIN/VAL/TEST/FORECAST分目录，输出完整行数和样本hash |
 | M01 | shards→三模型/评价 | CLI单GPU任务，CUDA证据和07门禁 |
@@ -23,7 +23,7 @@ J02有重复、三类distinct、item-category一致性等物理子作业；J03/J
 
 J04日期位图只覆盖固定9天。对每个用户、每个连续区间判断active/pv/buy位图交集并输出计数；pv与buy可发生在区间内不同天。次日复访的分子来自active位图相邻位，不由日UV相减。range_summary共45个区间，支持API任意整日范围准确UV。entity_daily全量保存商品/类目每日四行为数；不对每个商品维护全用户集合。
 
-J05每用户每锚点维护14维统计、48位活跃桶、最后事件时间及最多128条序列；标签只需buy存在标记。整个用户原始事件不得list化。SEEN_TRAIN集合由TRAIN样本user_id去重产生，按user做外排join给验证/测试样本标记cohort；不得在driver加载全部用户集合。类别碰撞统计使用(category_id,bucket)去重后按bucket聚合，记录不同类目数超过1的桶数，不把碰撞数据改变为词表输入。单用户超大历史仍为流式，长尾靠监测，不把一个用户随意拆开导致错误标签。无需构造全量购物篮、共现对或用户×商品矩阵。
+J05每用户每锚点维护20维统计（含全历史强度、未购加收藏商品与历史购买标记）、48位活跃桶、最后事件时间及最多128条序列；标签只需buy存在标记。整个用户原始事件不得list化。SEEN_TRAIN集合由TRAIN样本user_id去重产生，按user做外排join给验证/测试样本标记cohort；不得在driver加载全部用户集合。类别碰撞统计使用(category_id,bucket)去重后按bucket聚合，记录不同类目数超过1的桶数，不把碰撞数据改变为词表输入。单用户超大历史仍为流式，长尾靠监测，不把一个用户随意拆开导致错误标签。无需构造全量购物篮、共现对或用户×商品矩阵。
 
 ## 调度与资源
 

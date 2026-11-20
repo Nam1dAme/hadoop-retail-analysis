@@ -1,11 +1,12 @@
 import json
 import os
 import re
+from datetime import timedelta
 import urllib.parse
 import streamlit as st
 from . import charts
 from .client import ApiFault
-from .components import section, metrics, number, ratio, filters, table, pagination, empty
+from .components import section, metrics, number, ratio, filters, release_window, table, pagination, empty
 
 BEHAVIORS = {'pv': '浏览', 'buy': '购买', 'cart': '加购', 'fav': '收藏'}
 NUMERIC_ID_RE = re.compile(r'^\d{1,20}$')
@@ -18,9 +19,12 @@ def _validate_numeric_id(value, label):
         return None
     return cleaned
 
+def _short(day):
+    return f'{day.month:02d}-{day.day:02d}'
+
 
 def overview(api, release):
-    params = filters('overview')
+    params = filters('overview', release)
     data = api.get('/overview', **params)['data']
     metrics(
         [(BEHAVIORS[k] + '行为', number(data[k + '_count']), '行为记录次数') for k in BEHAVIORS]
@@ -51,7 +55,7 @@ def overview(api, release):
 
 
 def entities(api, release):
-    params = filters('entities')
+    params = filters('entities', release)
     a, b = st.columns(2)
     with a:
         kind = st.selectbox('分析对象', ['ITEM', 'CATEGORY'], format_func=lambda v: '商品' if v == 'ITEM' else '类目')
@@ -103,7 +107,7 @@ def entities(api, release):
 
 
 def activity(api, release):
-    params = filters('activity')
+    params = filters('activity', release)
     rows = api.get('/activity', **params)['data']
     with st.container(border=True, key='panel_activity'):
         section('活跃与首次观察', '首次观察仅指在本数据观察期第一次出现，不代表真实注册日期。')
@@ -172,8 +176,9 @@ def predictions(api, release):
         format_func=lambda v: '历史测试（结果已观察）' if v == 'TEST' else '未来窗口（结果未观察）',
         horizontal=True,
     )
+    _,window_end=release_window(release)
     if mode == 'FORECAST':
-        st.info('使用 2017-12-02 至 12-04 零点前的行为，预测 2017-12-04 全天。未观察到目标日结果，不能据此计算准确率；这不是对当前日期的预测。')
+        st.info(f'使用 {window_end-timedelta(days=2)} 至 {window_end} 零点前的行为，预测 {window_end} 全天。未观察到目标日结果，不能据此计算准确率；这不是对当前日期的预测。分数为模型打分，未做概率校准，且预测输入为周末历史，训练集仅含工作日。')
         model = release['selected_model_id']
     else:
         experiment = api.get('/experiments')['data']
@@ -183,7 +188,7 @@ def predictions(api, release):
             [r['model_run_id'] for r in models],
             format_func=lambda v: next(r['algorithm'] for r in models if r['model_run_id'] == v),
         )
-        st.caption('历史测试目标窗口为北京时间 2017-12-02 全天。模型与阈值在查看测试结果前已固定。')
+        st.caption(f'历史测试目标窗口为北京时间 {window_end-timedelta(days=2)} 全天。模型与阈值在查看测试结果前已固定。')
     with st.form('prediction_filter', border=False):
         user = st.text_input('用户 ID（留空查看分数排行）')
         submit = st.form_submit_button('应用查询', type='primary')
@@ -198,7 +203,7 @@ def predictions(api, release):
             else:
                 st.session_state['prediction_user'] = validated
     with st.container(border=True, key='panel_prediction'):
-        section('用户预测结果', '分数为模型估计，不能直接解释为经过校准的真实购买概率。')
+        section('用户预测结果', '分数为模型打分，未做概率校准，且预测输入为周末历史，训练集仅含工作日。' if mode == 'FORECAST' else '分数为模型估计，不能直接解释为经过校准的真实购买概率。')
         try:
             pagination(
                 api,
@@ -230,7 +235,7 @@ def experiments(api, release):
     models = data['models']
     st.caption('预测目标：过去 48 小时有活动的用户，未来 24 小时是否记录 buy。')
     with st.container(border=True, key='panel_model_comparison'):
-        section('三种算法的实测对照', '仅验证集决定算法、参数与阈值；测试集用于最终检查。')
+        section('各算法的实测对照', '仅验证集决定算法、参数与阈值；测试集用于最终检查。')
         rows = []
         for model in models:
             row = dict(
@@ -247,15 +252,30 @@ def experiments(api, release):
             rows.append(row)
         table(rows)
         st.caption(data['selection_reason'])
+        seed_rows = []
+        for algorithm, variance in (data.get('seed_variance') or {}).items():
+            seed_rows.append(dict(
+                算法=algorithm, 种子=', '.join(str(s) for s in variance.get('seeds', [])),
+                **{'TEST AP 均值': variance.get('mean'), 'TEST AP 标准差': variance.get('std'),
+                   'TEST AP': ', '.join('无' if v is None else f'{v:.4f}' for v in variance.get('test_ap', [])),
+                   'TEST AUC': ', '.join('无' if v is None else f'{v:.4f}' for v in variance.get('test_auc', []))},
+            ))
+        if seed_rows:
+            section('额外种子方差', '选择完成后用相同超参在 seed 43/44 上追加训练，仅用于报告 TEST 方差，不参与选择。')
+            table(seed_rows)
     selected_index = next((i for i, row in enumerate(models) if row['model_run_id'] == data['selected_model_id']), 0)
     model = st.selectbox('查看实验详情', models, index=selected_index, format_func=lambda r: r['algorithm'])
     with st.container(border=True, key='panel_calibration'):
         section('预测分数与实际购买比例', '每个概率桶同时报告样本数；空桶不当作零购买率。测试结果只用于检查，不改变已固定阈值。')
         split = st.selectbox('评价集合', ['VALIDATION', 'TEST'], format_func=lambda v: '验证集' if v == 'VALIDATION' else '测试集')
+        available = {metric['cohort'] for metric in model['metrics']}
+        preferred = ['ALL', 'SEEN_TRAIN', 'UNSEEN_TRAIN']
+        cohorts = [c for c in preferred if c in available] + sorted(c for c in available if c not in preferred)
         cohort = st.selectbox(
             '用户人群',
-            ['ALL', 'SEEN_TRAIN', 'UNSEEN_TRAIN'],
-            format_func=lambda v: {'ALL': '全部用户', 'SEEN_TRAIN': '训练时已出现', 'UNSEEN_TRAIN': '训练时未出现'}[v],
+            cohorts or ['ALL'],
+            format_func=lambda v: {'ALL': '全部用户', 'SEEN_TRAIN': '训练时已出现',
+                                   'UNSEEN_TRAIN': '训练时未出现'}.get(v, v.replace('DAY:', '测试日 ')),
         )
         bins = model.get('calibration', {}).get(split, {}).get(cohort, [])
         if bins:
@@ -267,6 +287,12 @@ def experiments(api, release):
         else:
             empty('没有可展示的校准分桶', '发布时接入已封存的真实分桶结果；没有样本的人群留空。')
         values = {m['name']: m['value'] for m in model['metrics'] if m['split'] == split and m['cohort'] == cohort}
+        top_rows = [dict(比例=label, **{name: values.get(f'{name}_at_{suffix}')
+                                      for name in ('precision', 'recall', 'lift')})
+                    for suffix, label in (('1pct', '1%'), ('5pct', '5%'), ('10pct', '10%'))]
+        if any(row['precision'] is not None for row in top_rows):
+            section('Top-k 排序指标', '按分数降序、同分按 sample_key 取前 ceil(k×样本数)；lift 相对该人群实际正例率。')
+            table(top_rows, {'比例': '比例', 'precision': 'Precision', 'recall': 'Recall', 'lift': 'Lift'})
         if all(values.get(k) is not None for k in ('tp', 'fp', 'fn', 'tn')):
             table(
                 [
@@ -275,7 +301,7 @@ def experiments(api, release):
                 ]
             )
     with st.container(border=True, key='panel_training'):
-        section('训练过程', 'CONSTANT 没有可训练参数，因此没有训练曲线。' if model['algorithm'] == 'CONSTANT' else '当前模型每一轮训练与验证的实测结果。')
+        section('训练过程', '固定分数基线没有可训练参数，因此没有训练曲线。' if model['algorithm'] in ('CONSTANT', 'RULE') else '当前模型每一轮训练与验证的实测结果。')
         if model['history']:
             a, b = st.columns(2)
             with a:
@@ -286,7 +312,7 @@ def experiments(api, release):
             with b:
                 st.plotly_chart(charts.lines(model['history'], 'epoch', [('validation_ap', '验证 AP', '#3159D6')]), use_container_width=True)
         else:
-            empty('固定分数基线', '所有用户使用训练集购买正例率作为分数，不进行参数训练。')
+            empty('固定分数基线', 'CONSTANT 使用训练集正例率，RULE 使用 16 组训练经验率；均不进行参数训练。')
     with st.container(border=True, key='panel_model_resources'):
         section('资源与公平速度对照', 'GRU 的 FP32 CPU/GPU 对照与当前模型的正式训练分别记录。GPU 更慢也如实展示。')
         metrics(
@@ -387,8 +413,12 @@ def versions(api, release):
         )
     with st.container(border=True, key='panel_method'):
         section('范围与方法')
-        st.write('观察期：北京时间 2017-11-25 至 2017-12-04，结束边界不包含在内。数据为抽样历史日志，不代表全站或长期情况。')
-        st.write('训练集：11-27 至 11-30；验证集：12-01；测试集：12-02。每个样本使用前 48 小时行为，观察随后 24 小时是否购买。')
+        start,end=release_window(release)
+        st.write(f'观察期：北京时间 {start} 至 {end}，结束边界不包含在内。数据为抽样历史日志，不代表全站或长期情况。')
+        st.write(f'训练集：{_short(start+timedelta(days=2))} 至 {_short(start+timedelta(days=5))}；'
+                 f'验证集：{_short(start+timedelta(days=6))}；'
+                 f'测试集：{_short(start+timedelta(days=7))} 至 {_short(start+timedelta(days=8))}。'
+                 '每个样本使用前 48 小时行为，观察随后 24 小时是否购买。')
         st.write('没有金额、订单号、商品名称或曝光信息，不能计算 GMV、客单价或真实曝光点击率。用户可跨日期出现，这里检验时间泛化，另报告是否在训练集中出现。')
         st.write('当前为单机伪分布式，HDFS 副本 1，不提供硬件故障高可用。当前没有独立备份介质；本地恢复演练与磁盘故障保护分别验收。')
     if st.button('生成汇总报告'):

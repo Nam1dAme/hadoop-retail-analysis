@@ -14,6 +14,7 @@ from ml.shards import shard_sample_keys
 from .validation import prepare_offline_checks
 
 TABLE_WIDTHS={'event_cube':5,'entity_daily':6,'user_daily':10,'range_summary':7,'activity_daily':5,'prediction':11}
+BASE_DATASETS={'event_cube','entity_daily','user_daily','range_summary','activity_daily','FORECAST'}
 
 
 def _estimate_row_bytes(row):
@@ -91,7 +92,7 @@ def prediction_rows(release_id,mode,model_id,path,cache,threshold,lease):
     if offset!=len(predictions):raise ManifestError('Prediction row count differs')
 
 
-def publish_pointer(db,release_id,expected_generation,operator='behavior-cli',action='PUBLISH'):
+def publish_pointer(db,release_id,expected_generation,operator='behavior-cli',action='PUBLISH',datasets=None):
     """Short transaction: status, current CAS and audit event are indivisible."""
     db.begin()
     try:
@@ -104,7 +105,8 @@ def publish_pointer(db,release_id,expected_generation,operator='behavior-cli',ac
             if action=='ROLLBACK' and target['status']!='READY':raise ManifestError('Rollback requires an existing READY release')
             if action=='PUBLISH':
                 q.execute('SELECT dataset,complete FROM release_load WHERE release_id=%s',(release_id,));parts=q.fetchall()
-                expected={'event_cube','entity_daily','user_daily','range_summary','activity_daily','TEST-CONSTANT','TEST-LOGISTIC','TEST-GRU','FORECAST'}
+                expected=set(datasets) if datasets is not None else BASE_DATASETS | {
+                    'TEST-CONSTANT','TEST-LOGISTIC','TEST-GRU','TEST-RULE'}
                 if {x['dataset'] for x in parts}!=expected or not all(x['complete'] for x in parts):raise ManifestError('Incomplete release datasets')
                 q.execute("UPDATE data_release SET status='READY',published_at=COALESCE(published_at,%s) WHERE release_id=%s",(now(),release_id))
             q.execute('UPDATE current_release SET release_id=%s,generation=generation+1 WHERE singleton_id=1 AND generation=%s',(release_id,expected_generation))
@@ -134,8 +136,11 @@ def publish(lease):
         q.execute('SELECT status,selected_model_id,test_sealed_at FROM experiment WHERE experiment_id=%s AND batch_id=%s',(models['experiment_id'],batch));experiment=q.fetchone()
         if not experiment or experiment['status']!='SUCCEEDED' or experiment['test_sealed_at'] is None or experiment['selected_model_id']!=models['selected_model_id']:
             raise ManifestError('Completed sealed experiment is required')
-        q.execute("SELECT COUNT(*) AS n FROM model_run WHERE experiment_id=%s AND algorithm='GRU' AND device='cuda' AND status='SUCCEEDED'",(models['experiment_id'],))
-        if q.fetchone()['n']!=2:raise ManifestError('Both full CUDA candidates must complete')
+        q.execute("SELECT seed,COUNT(*) AS n FROM model_run WHERE experiment_id=%s AND algorithm='GRU' AND device='cuda' AND status='SUCCEEDED' GROUP BY seed",(models['experiment_id'],))
+        if {r['seed']:r['n'] for r in q.fetchall()}.get(42)!=2:raise ManifestError('Both full CUDA candidates must complete')
+        for algorithm in ('LOGISTIC','GRU'):
+            variance=models.get('seed_variance',{}).get(algorithm,{})
+            if set(variance.get('seeds',[]))!={42,43,44}:raise ManifestError('Seed variance runs incomplete: '+algorithm)
         q.execute('SELECT device,COUNT(*) AS n FROM benchmark WHERE experiment_id=%s GROUP BY device',(models['experiment_id'],))
         if {r['device']:r['n'] for r in q.fetchall()}!={'cpu':3,'cuda':3}:raise ManifestError('Complete CPU/CUDA benchmark required')
     stages={}
@@ -156,7 +161,7 @@ def publish(lease):
                   experiment_id=models['experiment_id'],selected_model_id=models['selected_model_id'],
                   inputs={name:sha(work/(name+'.json')) for name in ('models','forecast','samples','pipeline')},
                   models_archive=models['archive'],forecast_archive=forecast['output_path'],
-                  task_evidence=task_evidence,
+                  seed_variance=models.get('seed_variance',{}),task_evidence=task_evidence,
                   samples=samples['samples']['splits'],analysis=pipeline['analysis'],quality=pipeline['quality'],
                   reliability={'independent_backup_verified':False,'storage':'single physical disk; local copies only'},
                   stages={k:{'run_id':v['run_id'],'outputs':v['outputs']} for k,v in stages.items()})
@@ -171,8 +176,10 @@ def publish(lease):
             remote=f'{lease.config["hdfs"]["root"]}/releases/{release_id}/manifest.json'
             fc_info=forecast.get('forecast',{})
             rel_cfg=lease.config.get('release',{})
-            raw_as_of=rel_cfg.get('as_of') or fc_info.get('as_of') or '2017-12-03T16:00:00Z'
-            raw_window_end=rel_cfg.get('window_end') or fc_info.get('window_end') or '2017-12-04T16:00:00Z'
+            raw_as_of=rel_cfg.get('as_of') or fc_info.get('as_of')
+            raw_window_end=rel_cfg.get('window_end') or fc_info.get('window_end')
+            if not raw_as_of or not raw_window_end:
+                raise ManifestError('Release requires forecast as_of and window_end from the forecast artifact')
             sql_as_of=raw_as_of.replace('T',' ').rstrip('Z')
             sql_window_end=raw_window_end.replace('T',' ').rstrip('Z')
             q.execute('INSERT INTO data_release VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,NULL)',
@@ -230,7 +237,8 @@ def publish(lease):
     if not storage.exists(remote):storage.put(manifest_file,remote)
     elif storage.json(remote)!=manifest:raise ManifestError('Immutable release manifest differs')
     with lease.db.cursor() as q:q.execute('UPDATE data_release SET loaded_at=%s WHERE release_id=%s',(now(),release_id))
-    lease.guard();publish_pointer(lease.db,release_id,generation)
+    lease.guard();publish_pointer(lease.db,release_id,generation,
+                                 datasets=BASE_DATASETS | {'TEST-'+item['algorithm'] for item in models['test']})
     result=dict(status='SUCCEEDED',release_id=release_id,manifest_hash=manifest_hash,manifest_path=remote,
                 counts=counts,validation_timings=validation_timings,seconds=time.monotonic()-started,published_at=stamp())
     atomic_json(work/'release.json',result)

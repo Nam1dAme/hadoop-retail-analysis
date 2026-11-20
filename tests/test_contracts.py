@@ -5,11 +5,12 @@ import json
 import numpy as np
 import pytest
 from ingest.source import examine
+from ml.models import NUMERIC_DIM
 from ml.shards import ShardWriter,ShardDataset
 from orchestration.common import ConfigError,load
 
 def sample(i,label=0):
-    return dict(sample_key=hashlib.sha256(('00'+str(i)+'|1512057600').encode()).hexdigest(),user_id='00'+str(i),as_of=1512057600,length=1,category=[7]+[0]*127,behavior=[1]+[0]*127,hour=[1]+[0]*127,gap=[0.0]*128,numeric=list(range(14)),label=label,history_event_count=1,cohort='SEEN_TRAIN')
+    return dict(sample_key=hashlib.sha256(('00'+str(i)+'|1512057600').encode()).hexdigest(),user_id='00'+str(i),as_of=1512057600,length=1,category=[7]+[0]*127,behavior=[1]+[0]*127,hour=[1]+[0]*127,gap=[0.0]*128,numeric=list(range(NUMERIC_DIM)),label=label,history_event_count=1,cohort='SEEN_TRAIN')
 
 def test_source_bytes_and_lines(tmp_path):
     p=tmp_path/'input.csv';p.write_bytes(b'a\r\nb\n\ninvalid\xff')
@@ -19,7 +20,7 @@ def test_source_bytes_and_lines(tmp_path):
     p.write_bytes(b'');assert examine(p)['rows']==0
 
 def test_shards_tail_shuffle_mmap_and_identity(tmp_path):
-    w=ShardWriter(tmp_path/'TRAIN',[0]*14,[1]*14,capacity=3)
+    w=ShardWriter(tmp_path/'TRAIN',[0]*NUMERIC_DIM,[1]*NUMERIC_DIM,capacity=3)
     for i in range(8):w.add(sample(i,i%2))
     m=w.finish();assert [s['rows'] for s in m['shards']]==[3,3,2]
     assert m['rows']==8 and m['positive_count']==4
@@ -38,7 +39,7 @@ def test_shards_tail_shuffle_mmap_and_identity(tmp_path):
 
 
 def test_forecast_and_zero_std(tmp_path):
-    w=ShardWriter(tmp_path/'FORECAST',[1]*14,[2]*14,capacity=1);w.add(sample(0,-1));m=w.finish()
+    w=ShardWriter(tmp_path/'FORECAST',[1]*NUMERIC_DIM,[2]*NUMERIC_DIM,capacity=1);w.add(sample(0,-1));m=w.finish()
     assert m['positive_count']==m['negative_count']==0
     batch=next(ShardDataset(tmp_path/'FORECAST').batches())
     assert batch['label'][0]==-1 and batch['numeric'][0,0]==-.5
@@ -75,7 +76,7 @@ def test_last_effective_batch_gradient_uses_actual_population(tmp_path):
     import torch
     from ml.shards import training_groups
     torch.set_num_threads(1)
-    w=ShardWriter(tmp_path/'TRAIN',[0]*14,[1]*14,capacity=5)
+    w=ShardWriter(tmp_path/'TRAIN',[0]*NUMERIC_DIM,[1]*NUMERIC_DIM,capacity=5)
     for i in range(13):w.add(sample(i,i%2))
     w.finish();dataset=ShardDataset(tmp_path/'TRAIN')
     groups=list(training_groups(dataset,micro_batch=4,effective_batch=8))
@@ -84,7 +85,7 @@ def test_last_effective_batch_gradient_uses_actual_population(tmp_path):
     for batches,weights,n in groups:
         assert sum(len(b['label']) for b in batches)==n and sum(weights)==pytest.approx(1)
         observed.extend(k for b in batches for k in b['sample_key'])
-        model=torch.nn.Linear(14,1,dtype=torch.float64)
+        model=torch.nn.Linear(NUMERIC_DIM,1,dtype=torch.float64)
         model.zero_grad()
         for batch,weight in zip(batches,weights):
             x=torch.from_numpy(batch['numeric']).double();y=torch.from_numpy(batch['label']).double()

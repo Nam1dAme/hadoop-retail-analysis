@@ -5,7 +5,7 @@ scripts/behaviorctl --baseline UBA-DOC-1.0.0 pipeline --batch-id <UUID> --throug
 scripts/behaviorctl --baseline UBA-DOC-1.0.0 prepare-samples --batch-id <UUID>
 ```
 
-J05只在YARN按用户/时间/来源排序，维护7个锚点的有界状态；历史48h、目标24h。序列128条，数值统计取完整历史。训练4日、验证12月1日、测试12月2日、未来12月4日；未来标签文件编码-1。每个样本的user和as_of唯一。
+J05只在YARN按用户/时间/来源排序，维护8个锚点的有界状态；历史48h、目标24h。序列128条，数值统计取完整历史及锚点前全历史。训练4日、验证12月1日、测试12月2/3日、未来12月4日；未来标签文件编码-1，分片schema_version=2.0。每个样本的user和as_of唯一。
 
 J06只读TRAIN。保留sum/sumsq审计量，同时用Welford/Chan稳定归并总体方差，避免常量特征被浮点消减误差错误放大；常量标准差按1处理。E01以float64标准化、float32存储，每列独立.npy，每分片最多32768条。ID保留UTF8字节及int64偏移，不转浮点，不创建百万用户embedding。
 

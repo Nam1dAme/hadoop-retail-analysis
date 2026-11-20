@@ -3,8 +3,9 @@ import hashlib
 import json
 import numpy as np
 from orchestration.common import atomic_json,ManifestError,sha,fingerprint
+from .models import NUMERIC_DIM
 
-SPECS={'as_of':('<i8',()),'length':('u1',()),'category':('<u2',(128,)),'behavior':('u1',(128,)),'hour':('u1',(128,)),'gap':('<f4',(128,)),'numeric':('<f4',(14,)),'label':('i1',()),'history_event_count':('<i8',()),'cohort':('u1',())}
+SPECS={'as_of':('<i8',()),'length':('u1',()),'category':('<u2',(128,)),'behavior':('u1',(128,)),'hour':('u1',(128,)),'gap':('<f4',(128,)),'numeric':('<f4',(NUMERIC_DIM,)),'label':('i1',()),'history_event_count':('<i8',()),'cohort':('u1',())}
 
 def _compute_sample_keys(shard_dir,indices,as_of_arr):
     offsets=np.load(shard_dir/'user_offsets.npy',mmap_mode='r',allow_pickle=False)
@@ -27,6 +28,7 @@ class ShardWriter:
     def __init__(self,path,mean,std,capacity=32768):
         if not 1<=capacity<=32768:raise ValueError('shard capacity out of range')
         self.path=Path(path);self.path.mkdir(parents=True,exist_ok=False);self.mean=np.asarray(mean,dtype=np.float64);self.std=np.asarray(std,dtype=np.float64);self.capacity=capacity;self.buffers={};self.shards=[];self.count=0;self.positives=0;self.zeros=0;self.seen=0;self.index=0;self.identities=hashlib.sha256();self.current=None
+        if self.mean.shape!=(NUMERIC_DIM,) or self.std.shape!=(NUMERIC_DIM,):raise ValueError('Normalization width must match NUMERIC_DIM')
     def _open(self):
         self.current=self.path/f'shard-{len(self.shards):05}';self.current.mkdir()
         self.buffers={k:np.lib.format.open_memmap(self.current/(k+'.npy'),mode='w+',dtype=dtype,shape=(self.capacity,*shape)) for k,(dtype,shape) in SPECS.items()}
@@ -35,6 +37,7 @@ class ShardWriter:
         if self.current is None:self._open()
         n=self.index;length=int(row['length']);assert 1<=length<=128
         if row['cohort'] not in ('SEEN_TRAIN','UNSEEN_TRAIN'):raise ManifestError('Unknown cohort')
+        if len(row['numeric'])!=NUMERIC_DIM:raise ManifestError('Numeric width mismatch')
         for k in SPECS:
             if k=='numeric':v=(np.asarray(row[k],dtype=np.float64)-self.mean)/self.std
             elif k=='cohort':v=1 if row[k]=='SEEN_TRAIN' else 0
@@ -61,14 +64,16 @@ class ShardWriter:
         self.shards.append({'directory':self.current.name,'rows':n,'files':files});self.current=None
     def finish(self):
         if self.current:self._close()
-        m={'schema_version':'1.0','rows':self.count,'positive_count':self.positives,'negative_count':self.zeros,'seen_count':self.seen,'unseen_count':self.count-self.seen,'sample_order_sha256':self.identities.hexdigest(),'shards':self.shards}
+        m={'schema_version':'2.0','rows':self.count,'positive_count':self.positives,'negative_count':self.zeros,'seen_count':self.seen,'unseen_count':self.count-self.seen,'sample_order_sha256':self.identities.hexdigest(),'shards':self.shards}
         atomic_json(self.path/'manifest.json',m);return m
 
 class ShardDataset:
     """逐分片mmap；顺序和片内排列确定，不对全量样本构建Python列表。"""
     def __init__(self,path,verify=True):
         self.path=Path(path);self.manifest=json.loads((self.path/'manifest.json').read_text())
-        if self.manifest.get('schema_version')!='1.0':raise ManifestError('Unknown sample schema')
+        version=self.manifest.get('schema_version')
+        if version=='1.0':raise ManifestError('Legacy 14-dim sample cache is incompatible; regenerate v2 shards')
+        if version!='2.0':raise ManifestError('Unknown sample schema: '+str(version))
         if verify:
             count=positive=negative=seen=0
             for shard in self.manifest['shards']:

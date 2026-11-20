@@ -7,6 +7,7 @@ from orchestration.common import load,ROOT,sha
 from orchestration.database import connect
 from orchestration.storage import Hdfs
 from orchestration.pipeline import latest,validate,files
+from ml.models import NUMERIC_DIM
 
 config=load(ROOT/'var/fixtures/test.toml');hdfs=Hdfs(config)
 batch=sys.argv[1]
@@ -53,7 +54,7 @@ rows=[json.loads(line.split('\t',1)[1]) for line in hdfs.dump(files(outputs['J05
 assert len({r['sample_key'] for r in rows})==len(rows)
 train=[r for r in rows if r['split']=='TRAIN']
 assert all(r['label']==0 for r in train)
-assert all(len(r['category'])==128 and len(r['numeric'])==14 for r in rows)
+assert all(len(r['category'])==128 and len(r['numeric'])==NUMERIC_DIM for r in rows)
 import numpy as np
 normalization=json.loads(next(hdfs.dump(files(outputs['J06']))).split('\t',1)[1])
 a=np.array([r['numeric'] for r in train]);std=a.std(axis=0);std[std==0]=1

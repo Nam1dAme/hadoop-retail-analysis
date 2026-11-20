@@ -35,13 +35,13 @@ CSV为UTF-8、无表头、五列无引号简单逗号分隔；CRLF/LF均接收�
 
 ## 训练样本和特征
 
-锚点集合：TRAIN为11月27/28/29/30日；VALIDATION为12月1日；TEST为12月2日；FORECAST为12月4日，全部年份2017、北京时间00:00。历史[t-48h,t)，标签[t,t+24h)。预测人群为历史内有事件的user。FORECAST没有标签，label=null；其他样本y=该标签窗至少一条buy。相同用户可跨日出现，每个(user,t)唯一；不为标签窗新出现但历史为空者生成样本。
+锚点集合：TRAIN为11月27/28/29/30日；VALIDATION为12月1日；TEST为12月2日、12月3日；FORECAST为12月4日，全部年份2017、北京时间00:00。历史[t-48h,t)，标签[t,t+24h)；锚点8（12月3日）标签窗完整在数据内，FORECAST无标签。预测人群为历史内有事件的user。FORECAST没有标签，label=null；其他样本y=该标签窗至少一条buy。相同用户可跨日出现，每个(user,t)唯一；不为标签窗新出现但历史为空者生成样本。
 
 每样本保留最后128个历史事件，按(event_ts,source_sha256,source_offset)升序；同秒排序仅为复现，不代表真实发生顺序。左侧截断旧事件，右侧PAD至128；有效长度1—128。序列包括类别桶、行为索引、小时索引、前一保留事件时间差。类别桶=1+int(SHA256(category_id原UTF-8),big_endian)%16384；PAD=0；这是固定哈希特征，无词表泄漏，也不代表类目语义相似。behavior索引pv=1,buy=2,cart=3,fav=4、PAD=0；hour索引hour+1，PAD=0。gap首项为0，其余秒差，截断172800并log1p后除以log1p(172800)。
 
-14维数值特征顺序：按窗口1h、24h、48h分别记录pv/buy/cart/fav次数（12项）；距最近一次事件秒数（1项）；历史48个相对小时桶中非空桶数量（1项）。小时桶按floor((event_ts-(t-48h))/3600)，取0—47。14项均先log1p，使用TRAIN全量均值/总体标准差标准化，标准差为0取1；数值统计计算用float64，输出float32。计数来自完整48h，不受128条截断影响。禁止加入标签窗事件或全数据统计。
+20维数值特征顺序：1—12为按窗口1h、24h、48h分别记录pv/buy/cart/fav次数；13为距最近一次事件秒数；14为历史48个相对小时桶中非空桶数量（桶号floor((event_ts-(t-48h))/3600)，取0—47）；15—18为[2017-11-25 00:00,t)全历史pv/buy/cart/fav计数c的log1p(c/observedDays)，observedDays=(t-START)/86400.0；19为近48h内cart/fav且全历史未buy的不同item数的log1p（Reducer中buy可能晚于cart，输出时取差集）；20为全历史是否出现buy（0/1）。1—19先log1p，使用TRAIN全量均值/总体标准差标准化，标准差为0取1；数值统计计算用float64，输出float32。窗口计数与序列来自完整48h，不受128条截断影响；全历史仅用ts<t的事件。禁止加入标签窗事件或全数据统计。
 
-序列分片字段：sample_key、user_id、as_of、length、category[128] int32、behavior[128] uint8、hour[128] uint8、gap[128] float32、numeric[14] float32、label int8（FORECAST=-1仅文件编码）、history_event_count int64。sample_key=SHA256(user_id+'|'+as_of UTC秒)。每分片≤32768样本，每列独立.npy，非object dtype；字符串ID单独UTF-8索引文件与int64偏移，禁止pickle。训练索引映射回原ID，不作为模型输入。
+序列分片字段：sample_key、user_id、as_of、length、category[128] uint16、behavior[128] uint8、hour[128] uint8、gap[128] float32、numeric[20] float32、label int8（FORECAST=-1仅文件编码）、history_event_count int64。sample_key=SHA256(user_id+'|'+as_of UTC秒)。每分片≤32768样本，每列独立.npy，非object dtype；字符串ID单独UTF-8索引文件与int64偏移，禁止pickle。训练索引映射回原ID，不作为模型输入。
 
 ## 产物与来源
 

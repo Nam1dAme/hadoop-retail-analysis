@@ -13,6 +13,7 @@ sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 from orchestration.common import ROOT,load,atomic_json,stamp,fingerprint
 from orchestration.control import Lease
 from orchestration.database import connect
+from ml.shards import shard_sample_keys
 
 ROW=np.dtype([('user','S20'),('score','<f8'),('label','i1'),('history','<i8'),('key','S64'),('asof','<i8')])
 
@@ -21,7 +22,7 @@ def expected_rows(cache,scores,directory):
     for shard in manifest['shards']:
         root=cache/shard['directory'];n=shard['rows'];data=np.empty(n,dtype=ROW)
         ids=(root/'user_ids.utf8').read_bytes();positions=np.load(root/'user_offsets.npy',mmap_mode='r',allow_pickle=False)
-        asof=np.load(root/'as_of.npy',mmap_mode='r',allow_pickle=False);keys=np.load(root/'sample_key.npy',mmap_mode='r',allow_pickle=False)
+        asof=np.load(root/'as_of.npy',mmap_mode='r',allow_pickle=False);keys=shard_sample_keys(root)
         label=np.load(root/'label.npy',mmap_mode='r',allow_pickle=False)
         history=np.load(root/'history_event_count.npy',mmap_mode='r',allow_pickle=False)
         part=prediction[offset:offset+n];assert np.array_equal(part['sample_key'],keys) and np.array_equal(part['label'],label)
