@@ -7,8 +7,8 @@ UBA-DOC-1.0.0 / FROZEN。以下是未来实现协议，不表示命令已经存�
 | 阶段 | 输入→输出 | 键、状态和规模约束 |
 |---|---|---|
 | I00 | CSV→raw清单 | 流式SHA和归档；同hash+policy复用batch；不复制到旧项目目录 |
-| J01 | raw→facts/rejected/quality | Map解析、统计，来源偏移保持；按日期输出；真正YARN应用 |
-| J02 | facts→profile | 五字段键归组计重复候选；分别按user/item/category去重计基数，多作业子ID独立登记；不在driver建集合 |
+| J01 | raw→facts/rejected/quality | Map解析、统计，来源偏移保持；map-only + MultipleOutputs 按日期/outside/rejected 直接写出，无 shuffle；真正YARN应用 |
+| J02 | facts→profile | 五字段键归组计重复候选（128位哈希组键 + 原字段回退比较）；分别按user/item/category去重计基数，不在driver建集合 |
 | J03 | scope facts→event_cube/entity_daily | 日/小时/type及日/entity/type键计数；Combiner仅加法；热点键可先按source_offset hash盐分16路，再去盐汇总 |
 | J04 | scope facts→user_daily/user_masks/range_summary | user,date二级排序，单用户流式计四行为与小时位图；9日bitmask计算45种连续日期范围的UV与pv∩buy；另算日首次出现与D/D+1复访 |
 | J05 | scope facts→raw_samples | partition=user；sort=(user,ts,source,offset)；group=user；按固定8个锚点维护有界状态，输出TRAIN4+VAL1+TEST2+FORECAST1 |
@@ -20,6 +20,8 @@ UBA-DOC-1.0.0 / FROZEN。以下是未来实现协议，不表示命令已经存�
 | R01 | STAGING→READY/current | 短事务发布；必须关联完整模型与真实GPU训练证据 |
 
 J02有重复、三类distinct、item-category一致性等物理子作业；J03/J04也允许拆成多作业。每个子作业登记自己的application ID、输入输出和计数，逻辑阶段仅在全部成功时完成。不得用一个虚构application ID覆盖整个DAG。
+
+J01无reducer，facts按`facts/date=<日期>/part-*`、坏行按`rejected/part-*`由MultipleOutputs直接写出；J02重复候选原定义为合法记录五字段（含原始timestamp token）整行相同，现以128位哈希作组键，并由 J02 专用的 `Profile.DuplicateGroup` 用原字段做分组回退比较（其他作业仍使用 `SortKey.Group` 的纯 group 语义），哈希碰撞不会改变计数；来源主键`source+offset`在单源事实中恒唯一，故不再发出O:死检查。J02的PROFILE计数器是汇总唯一权威来源（跨reducer已合并），输出中的同名汇总行保留兼容，`apply_quality`优先读计数器并保留timestamp_min/max的旧解析；`tests/verify_local_equivalence.py`用LocalJobRunner验证新旧等价。
 
 J04日期位图只覆盖固定9天。对每个用户、每个连续区间判断active/pv/buy位图交集并输出计数；pv与buy可发生在区间内不同天。次日复访的分子来自active位图相邻位，不由日UV相减。range_summary共45个区间，支持API任意整日范围准确UV。entity_daily全量保存商品/类目每日四行为数；不对每个商品维护全用户集合。
 

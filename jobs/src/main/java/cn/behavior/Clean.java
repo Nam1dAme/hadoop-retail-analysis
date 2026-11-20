@@ -5,6 +5,7 @@ import org.apache.hadoop.io.*;
 import org.apache.hadoop.mapreduce.*;
 import org.apache.hadoop.mapreduce.lib.output.MultipleOutputs;
 
+/** Map-only: 直接按分区写出事实，不再为了分目录做一次无意义的 shuffle。 */
 public final class Clean extends Mapper<LongWritable,Text,Text,Event> {
   private MultipleOutputs outputs;private String source;
   protected void setup(Context c){Event.init(c.getConfiguration());outputs=new MultipleOutputs(c);source=c.getConfiguration().get("behavior.source.sha256");if(source==null||!source.matches("[0-9a-f]{64}"))throw new IllegalArgumentException("Missing source hash");}
@@ -12,7 +13,7 @@ public final class Clean extends Mapper<LongWritable,Text,Text,Event> {
     c.getCounter("BEHAVIOR","raw_rows").increment(1);
     try {
       Event e=Event.parse(line.getBytes(),line.getLength(),source,key.get());
-      c.write(new Text(e.partitionDate()),e);
+      outputs.write("facts",new LongWritable(e.offset),e,"facts/date="+e.partitionDate()+"/part");
       c.getCounter("BEHAVIOR","accepted_rows").increment(1);
       c.getCounter("BEHAVIOR",e.scoped()?"in_scope_rows":"outside_rows").increment(1);
       if(e.scoped()){c.getCounter("BEHAVIOR","type_"+Event.TYPES[e.type]).increment(1);c.getCounter("DAILY",e.date()).increment(1);}
@@ -23,13 +24,4 @@ public final class Clean extends Mapper<LongWritable,Text,Text,Event> {
     }
   }
   protected void cleanup(Context c)throws IOException,InterruptedException{outputs.close();}
-  public static final class Reduce extends Reducer<Text,Event,LongWritable,Event> {
-    private MultipleOutputs outputs;
-    protected void setup(Context c){Event.init(c.getConfiguration());outputs=new MultipleOutputs(c);}
-    protected void reduce(Text date,Iterable<Event> events,Context c)throws IOException,InterruptedException{
-      String path="facts/date="+date.toString()+"/part";
-      for(Event e:events)outputs.write("facts",new LongWritable(e.offset),e,path);
-    }
-    protected void cleanup(Context c)throws IOException,InterruptedException{outputs.close();}
-  }
 }
