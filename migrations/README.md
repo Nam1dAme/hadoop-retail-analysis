@@ -1,4 +1,4 @@
-# 数据库迁移说明（001—010）
+# 数据库迁移说明（001—011）
 
 使用本项目 migrator 账号运行迁移：
 
@@ -20,6 +20,7 @@ scripts/behaviorctl --baseline UBA-DOC-1.0.0 --credentials var/secrets/migrator.
 - **008_api_query_indexes.sql**：为 API 常用查询路径补充复合索引：`task_run(batch_id, created_at, run_id)`、`data_release(status, published_at, release_id)` 与 `benchmark(experiment_id, device, repeat_index)`（使用 `CREATE INDEX IF NOT EXISTS`）。
 - **009_model_protocol.sql**：扩展 `model_metric.cohort` 与 `model_run.algorithm` 字段，纳入 `RULE` 基线。
 - **010_gbdt.sql**：将 `model_run.algorithm` 的 ENUM 扩展为包含 `GBDT` 直方图梯度提升基线。
+- **011_prediction_dual_day_pk.sql**：将 `prediction` 主键扩展为 `(release_id, mode, model_run_id, user_id, as_of)`，并更新 `prediction_scores` 索引包含 `as_of ASC`，以支持样本 v2 双日 `TEST` 窗口。
 
 ## 时间与时区语义
 
