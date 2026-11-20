@@ -1,11 +1,13 @@
 import copy
 from datetime import datetime, timezone
+import math
 import numpy as np
 import pytest
 import torch
-from ml.models import BehaviorGRU, Logistic, NUMERIC_DIM, rule_group_codes, rule_scores, seed_all, tensors
+from ml.models import BehaviorGRU, GRU_HIDDEN, GRU_LAYERS, Logistic, NUMERIC_DIM, rule_group_codes, rule_scores, seed_all, tensors
 from ml.metrics import SCORE_DTYPE, metrics, choose_threshold, descending_groups, evaluate_file
-from ml.training import save_checkpoint, trusted_load
+from ml.training import (amp_config, compute_warmup_steps, make_warmup_scheduler,
+                         save_checkpoint, scaled_learning_rate, trusted_load)
 from ml.experiment import rule_counts, select
 from orchestration.common import ManifestError
 
@@ -150,8 +152,101 @@ def test_gru_padding_ignored_within_max_length():
 
 def test_model_widths_follow_numeric_dim():
     assert NUMERIC_DIM == 20
+    assert GRU_LAYERS == 2
+    assert GRU_HIDDEN == 128
     assert Logistic().linear.in_features == NUMERIC_DIM
-    assert BehaviorGRU().head[0].in_features == 64 + NUMERIC_DIM
+    gru = BehaviorGRU()
+    assert gru.gru.num_layers == 2
+    assert gru.gru.hidden_size == 128
+    assert gru.project[0].out_features == 128
+    assert gru.head[0].in_features == 128 + NUMERIC_DIM
+    assert gru.head[0].out_features == 64
+    assert gru.head[-1].in_features == 64
+    assert gru.head[-1].out_features == 1
+    param_count = sum(p.numel() for p in gru.parameters())
+    assert param_count > 400_000
+
+
+def test_seed_all_deterministic_toggle():
+    seed_all(42, deterministic=False)
+    assert not torch.are_deterministic_algorithms_enabled()
+    assert torch.backends.cudnn.benchmark is True
+    assert torch.backends.cudnn.deterministic is False
+    assert torch.backends.cuda.matmul.allow_tf32 is True
+    assert torch.backends.cudnn.allow_tf32 is True
+
+    seed_all(42, deterministic=True)
+    assert torch.are_deterministic_algorithms_enabled()
+    assert torch.backends.cudnn.benchmark is False
+    assert torch.backends.cudnn.deterministic is True
+    assert torch.backends.cuda.matmul.allow_tf32 is False
+    assert torch.backends.cudnn.allow_tf32 is False
+    # Restore default high-throughput mode for subsequent tests.
+    seed_all(42, deterministic=False)
+
+
+def test_large_batch_lr_scaling_and_warmup():
+    assert scaled_learning_rate(0.001, 512) == pytest.approx(0.001)
+    assert scaled_learning_rate(0.001, 4096) == pytest.approx(0.001 * math.sqrt(8.0))
+    assert compute_warmup_steps(409600, 512) == 0
+    assert compute_warmup_steps(409600, 4096) == 20
+
+    param = torch.nn.Parameter(torch.zeros(1))
+    opt = torch.optim.AdamW([param], lr=0.004)
+    sched = make_warmup_scheduler(opt, warmup_steps=4)
+    lrs = []
+    for _ in range(6):
+        lrs.append(opt.param_groups[0]['lr'])
+        opt.step()
+        sched.step()
+    assert lrs == pytest.approx([0.001, 0.002, 0.003, 0.004, 0.004, 0.004])
+
+
+def test_amp_config_selection(monkeypatch):
+    assert amp_config(torch.device('cpu')) == (False, torch.float32, False, 'FP32')
+    monkeypatch.setattr(torch.cuda, 'is_bf16_supported', lambda: True)
+    assert amp_config(torch.device('cuda')) == (True, torch.bfloat16, False, 'BF16_AMP')
+    monkeypatch.setattr(torch.cuda, 'is_bf16_supported', lambda: False)
+    assert amp_config(torch.device('cuda')) == (True, torch.float16, True, 'FP16_AMP')
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason='CUDA unavailable')
+def test_score_disables_and_restores_tf32(tmp_path):
+    from ml.shards import ShardDataset, ShardWriter
+    from ml.training import score
+
+    writer = ShardWriter(tmp_path/'VAL', np.zeros(NUMERIC_DIM), np.ones(NUMERIC_DIM), capacity=8)
+    category = np.zeros(128, dtype=np.uint16)
+    behavior = np.zeros(128, dtype=np.uint8)
+    hour = np.zeros(128, dtype=np.uint8)
+    category[:2], behavior[:2], hour[:2] = 1, 1, 1
+    for i in range(4):
+        writer.add(dict(user_id=str(i + 1), as_of=1512057600, length=2,
+                        category=category, behavior=behavior,
+                        hour=hour, gap=np.zeros(128, dtype=np.float32),
+                        numeric=np.zeros(NUMERIC_DIM, dtype=np.float32), label=i % 2,
+                        history_event_count=2, cohort='SEEN_TRAIN'))
+    writer.finish()
+    dataset = ShardDataset(tmp_path/'VAL')
+
+    seed_all(42, deterministic=False)
+    assert torch.backends.cuda.matmul.allow_tf32 is True
+    assert torch.backends.cudnn.allow_tf32 is True
+
+    observed = {}
+    model = BehaviorGRU().to(torch.device('cuda')).eval()
+    hook = model.head.register_forward_hook(lambda *_: observed.update(
+        matmul=torch.backends.cuda.matmul.allow_tf32,
+        cudnn=torch.backends.cudnn.allow_tf32,
+    ))
+    try:
+        score(dataset, model, torch.device('cuda'), 'GRU', tmp_path/'scores.npy')
+    finally:
+        hook.remove()
+
+    assert observed == {'matmul': False, 'cudnn': False}
+    assert torch.backends.cuda.matmul.allow_tf32 is True
+    assert torch.backends.cudnn.allow_tf32 is True
 
 
 def test_validation_only_model_selection():

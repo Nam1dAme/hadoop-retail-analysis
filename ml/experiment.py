@@ -294,7 +294,7 @@ def run_experiment(lease, sample_index, benchmark=True):
             algorithm = item['algorithm']
             model = None
             gbdt_model = None
-            device = torch.device('cuda' if algorithm == 'GRU' else 'cpu')
+            device = torch.device('cuda' if (algorithm == 'GRU' or (algorithm == 'LOGISTIC' and torch.cuda.is_available())) else 'cpu')
             if algorithm in ('LOGISTIC', 'GRU'):
                 model = make_model(algorithm).to(device)
                 model.load_state_dict(trusted_load(item['checkpoint_path'], item['checkpoint_hash'], directory))

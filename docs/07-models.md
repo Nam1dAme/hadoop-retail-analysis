@@ -30,9 +30,9 @@ GRU正式训练CUDA、FP16 autocast+GradScaler，权重/优化器主状态FP32�
 
 ## 8GB单卡与数据加载
 
-默认micro_batch=256，gradient_accumulation=2，effective_batch=512；若预检超09预算，按128×4、64×8、32×16顺序缩小，effective_batch不变并记录配置。缩至32仍失败则门禁失败，不静默减序列长度/数据量。每次更新loss按实际样本数归一化，最后不足512仍更新且正确归一化；overflow跳步计入报告，非有限损失直接失败。
+CUDA GRU 从 micro_batch=4096 开始预检，到 32 为止依次减半。CPU LOGISTIC 使用 512，显式 CUDA LOGISTIC 从 8192 开始预检。GRU 预检使用长度全为 128 的输入，记录实际 dtype、成功更新及显存峰值。effective_batch=max(512, micro_batch)，两者都计入训练配置身份。学习率仍为 0.001 或 0.0003。更大的有效批量会减少每轮 AdamW 更新次数，收敛和验证 AP 以实测为准。每次更新按实际样本数归一化，包括末尾不足整批的样本。overflow 跳步计入报告，非有限损失直接失败。
 
-每epoch按seed+epoch确定分片顺序、片内索引顺序；mmap读取，不加载全表；num_workers=0默认，pin_memory=true，有界预取≤2个micro_batch。调至2 workers必须保证每样本恰好一次、RSS和吞吐测量合格，不能因worker复制数据造成重复。样本总处理数必须等于每epoch TRAIN样本数。
+每个 epoch 由 seed+epoch 决定分片和片内顺序。GRU 在分片内组成长度相近的批次，再打乱批次顺序，序列只读取到批次的最大有效长度。CUDA 训练和神经网络打分使用单线程预取下一组，复用两套 pinned 内存，通过拷贝流传输特征，序列长度留在 CPU。mmap 按分片读取，每个 epoch 处理完整 TRAIN 人口。打分按原始样本顺序写出 FP32 模型的分数，并核对样本人口和顺序哈希。
 
 完成每epoch保存CPU可加载state_dict、optimizer/scaler/RNG状态、epoch和输入hash，写临时文件后原子更名。中断恢复从最后完整epoch，未完成epoch重跑，不假装位级接续；恢复不得改变样本或参数。检查点仅来自本项目可信产物，不加载未知pickle。
 
