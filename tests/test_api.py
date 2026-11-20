@@ -7,6 +7,9 @@ import pymysql
 import pytest
 from orchestration.common import ROOT,load
 from orchestration.database import connect
+from service.database import Pool
+from fastapi.testclient import TestClient
+from service.api import create_app
 
 pytestmark=pytest.mark.skipif(os.environ.get('BEHAVIOR_INTEGRATION')!='1',reason='Requires explicit isolated MariaDB integration execution')
 
