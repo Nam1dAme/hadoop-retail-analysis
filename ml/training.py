@@ -12,6 +12,7 @@ import torch
 from torch.nn import functional as F
 from orchestration.common import ROOT, atomic_json, encode, fingerprint, sha, now, stamp, commit, ManifestError, PipelineError
 from .models import make_model, seed_all, tensors, rule_scores, FEATURES, NUMERIC_DIM
+from . import gbdt as gbdt_module
 from .shards import ShardDataset, training_groups
 from .metrics import SCORE_DTYPE, evaluate_file, choose_threshold
 
@@ -59,13 +60,13 @@ def resource_guard(device, lease=None):
         raise PipelineError('Training resource budget exceeded: ' + encode(usage))
 
 
-def score(dataset, model, device, algorithm, output, batch_size=512, rate=None, lease=None, rule=None):
+def score(dataset, model, device, algorithm, output, batch_size=512, rate=None, lease=None, rule=None, gbdt=None):
     """Write exactly one score per sample in immutable input order; evaluation is FP32."""
     output = Path(output)
     temporary = output.with_suffix('.tmp.npy')
     prediction = np.lib.format.open_memmap(temporary, mode='w+', dtype=SCORE_DTYPE,
                                          shape=(dataset.manifest['rows'],))
-    columns = ('numeric',) if algorithm in ('LOGISTIC', 'RULE') else FEATURES if algorithm == 'GRU' else ()
+    columns = ('numeric',) if algorithm in ('LOGISTIC', 'RULE', 'GBDT') else FEATURES if algorithm == 'GRU' else ()
     columns = (*columns, 'label', 'cohort', 'sample_key', 'as_of')
     if model is not None:
         model.eval()
@@ -80,6 +81,10 @@ def score(dataset, model, device, algorithm, output, batch_size=512, rate=None, 
                 if rule is None:
                     raise ManifestError('RULE scoring requires the frozen rule table')
                 values = rule_scores(batch['numeric'], rule)
+            elif algorithm == 'GBDT':
+                if gbdt is None:
+                    raise ManifestError('GBDT scoring requires the frozen model')
+                values = gbdt_module.predict_proba(gbdt, batch['numeric'])
             else:
                 inputs = tensors(batch, device, algorithm)
                 values = torch.sigmoid(model(inputs).float()).cpu().numpy().astype(np.float64)

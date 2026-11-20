@@ -8,6 +8,7 @@ from orchestration.pipeline import stage_run
 from ml.models import make_model
 from ml.training import score,trusted_load
 from ml.shards import ShardDataset
+from ml import gbdt as gbdt_lib
 
 
 def _forecast_window(lease,sample,data):
@@ -43,13 +44,15 @@ def forecast(lease,index=None):
     algorithm=selected['algorithm'];device=torch.device('cuda' if algorithm=='GRU' else 'cpu')
     def produce(storage,temp,work,run):
         started=time.monotonic();data=ShardDataset(Path(sample['samples']['cache_path'])/'FORECAST',verify=True)
-        model=None
+        model=None;gbdt_model=None
         if algorithm in ('LOGISTIC','GRU'):
             model=make_model(algorithm).to(device)
             model.load_state_dict(trusted_load(selected['checkpoint_path'],selected['checkpoint_hash'],ROOT/'var/production/models'))
+        if algorithm=='GBDT':
+            gbdt_model=gbdt_lib.load_model(selected['checkpoint_path'],selected['checkpoint_hash'],ROOT/'var/production/models')
         rule=selected['config'].get('rule') if algorithm=='RULE' else None
         if algorithm=='RULE' and not rule:raise ManifestError('RULE forecast requires the frozen rule table')
-        scores=score(data,model,device,algorithm,local/'forecast.npy',rate=selected['config'].get('rate'),rule=rule,lease=lease)
+        scores=score(data,model,device,algorithm,local/'forecast.npy',rate=selected['config'].get('rate'),rule=rule,gbdt=gbdt_model,lease=lease)
         import numpy as np
         arr=np.load(local/'forecast.npy',mmap_mode='r',allow_pickle=False)
         if not (arr['label']==-1).all() or len(arr)!=sample['samples']['splits']['FORECAST']['rows']:
@@ -61,7 +64,7 @@ def forecast(lease,index=None):
                     scores=scores,rows=scores['rows'],labels='UNOBSERVED',seconds=time.monotonic()-started,created_at=stamp())
         atomic_json(local/'forecast.json',result)
         storage.put(local/'forecast.npy',temp+'/forecast.npy');storage.put(local/'forecast.json',temp+'/forecast.json')
-        del model
+        del model,gbdt_model
         if device.type=='cuda':torch.cuda.empty_cache()
         return {'forecast':result}
     params=dict(experiment_id=models['experiment_id'],model_run_id=selected['model_run_id'],checkpoint_hash=selected['checkpoint_hash'],

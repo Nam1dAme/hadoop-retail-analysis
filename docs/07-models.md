@@ -10,7 +10,7 @@ UBA-DOC-1.0.0 / FROZEN。
 
 若来源完整性无法证明整个标签窗已覆盖，不能将缺失日期静默标为负例。TRAIN/VALIDATION/TEST总体必须各有正负两类、至少1000个样本及每类至少50条，否则正式实验门禁失败；小样例测试不受此限制。不重采样验证或测试，不负采样，不按未来行为筛选历史活跃人群。重叠历史造成样本相关，不声称IID置信区间。
 
-## 四种必做模型
+## 必做模型与新增基线
 
 | 模型 | 设计 |
 |---|---|
@@ -18,10 +18,13 @@ UBA-DOC-1.0.0 / FROZEN。
 | RULE | 反标准化数值特征，按 48h cart/buy/fav>0 与第 18 维>0 四个信号分 16 组；每组 TRAIN 平滑率 (正例+1)/(样本+2)，存 rules.json 并计入 checkpoint_hash；无可训练参数 |
 | LOGISTIC | 20维标准化特征→线性1→logit；PyTorch训练，BCEWithLogitsLoss；衡量序列模型的增益 |
 | GRU | 类别embedding(16385,16)、行为(5,8)、小时(25,4)，gap标量；29维拼接→Linear(29,64)+ReLU→单层GRU(hidden=64)；取每序列最后有效hidden，与20维数值拼接84→Linear32+ReLU+Dropout0.1→Linear1 |
+| GBDT（新增基线） | 纯 NumPy 直方图梯度提升二分类：只用20维数值特征，TRAIN 固定种子抽样分位数分箱（≤64箱、uint8），深度≤4、牛顿叶子值+L2(lambda=1)、min_child_samples=200、学习率0.1、≤300棵树；VALIDATION logloss 早停 patience=20 |
 
 padding索引0，PAD embedding固定0；使用length取最后有效输出，后部PAD不能影响结果。原始user_id/item_id不进入网络，不创建百万级用户或商品embedding；类别hash冲突是已知信息损失。GRU参数量约30万级，实施须给出精确count；参数少不等于显存峰值已验证。
 
 模型输出logit；损失使用未加权BCEWithLogitsLoss，不先sigmoid；评价/展示sigmoid。LOGISTIC和GRU均AdamW，weight_decay=1e-4，学习率候选固定[0.001,0.0003]，默认seed=42用于选择；最多20epoch，验证AP连续3epoch无超过1e-6提升早停，保留最佳epoch。选择封存前，LOGISTIC与GRU finalist以相同超参追加seed=43、44训练，不参与选择；TEST对所有finalist及追加运行评估，models.json的seed_variance报告seed、test_ap、test_auc与test_ap的mean/std。LOGISTIC无Dropout。所有候选使用同一训练样本全集，不截断只训前若干batch。
+
+GBDT不引入scikit-learn/lightgbm等新依赖。分位数边界只由TRAIN固定种子抽样（最多200k行）计算，分片按mmap顺序读取、全量TRAIN分箱矩阵常驻内存（约70MB），直方图用`np.bincount`，不使用Python逐行循环。每棵树在上一轮logit上计算梯度/海森，节点增益按`G²/(H+lambda)`计算，叶子值为牛顿步，最终分数为`base_score + 学习率×各树叶值`的sigmoid。VALIDATION只用于逐轮logloss早停与阈值选择，TEST/FORECAST只做加载后打分；早停保留验证logloss最好的树数。相同样本与种子生成的JSON逐位一致，其sha256即checkpoint_hash；`model.json`记录箱边界、树节点与base_score，`history.json`记录逐树日志。
 
 GRU正式训练CUDA、FP16 autocast+GradScaler，权重/优化器主状态FP32；损失在FP32计算，裁剪梯度norm≤1在unscale之后进行。LOGISTIC正式训练可CPU，记录实际设备。TF32关闭；Python/NumPy/torch种子和确定性开关必须记录；不承诺跨CUDA版本逐位相等。无CUDA不可降级冒充GPU完成。
 
@@ -37,13 +40,13 @@ GRU正式训练CUDA、FP16 autocast+GradScaler，权重/优化器主状态FP32�
 
 主指标Average Precision（AP，非梯形PR-AUC）；按不同分数组降序，AP=sum((Recall_k-Recall_(k-1))*Precision_k)，同分一起处理。另报ROC-AUC（同分平均秩）、LogLoss（概率截到[1e-7,1-1e-7]）、Brier、Precision/Recall/F1、混淆矩阵、固定10个等宽概率桶的校准图；top-k按分数降序、同分按sample_key取前ceil(k×n)，k∈{1%,5%,10%}报precision/recall/lift（lift=precision/实际正例率）。按全样本统一计算，不平均batch指标；分数字段带as_of，除ALL/SEEN_TRAIN/UNSEEN_TRAIN外按Asia/Shanghai日期报DAY:*；磁盘外排分数可用于精确AP/AUC，禁止把全量预测装入Python对象列表。
 
-阈值仅在VALIDATION网格0.005—0.995步长0.005上选F1最大，平局选较大阈值；score≥threshold为正。候选配置按VALIDATION ALL AP最高选，差≤1e-6按LogLoss低、参数少、预定义顺序CONSTANT/LOGISTIC/GRU/RULE及学习率列表顺序决胜。最终selected可为简单基线，但GRU训练与对照仍必须完成。
+阈值仅在VALIDATION网格0.005—0.995步长0.005上选F1最大，平局选较大阈值；score≥threshold为正。候选配置按VALIDATION ALL AP最高选，差≤1e-6按LogLoss低、参数少、预定义顺序CONSTANT/LOGISTIC/GRU/RULE/GBDT及学习率列表顺序决胜。最终selected可为简单基线，但GRU训练与对照仍必须完成。
 
-RULE基线先以TRAIN的mean/std反标准化，四个信号为48h cart(第10维)>0、48h buy(第9维)>0、48h fav(第11维)>0、第18维>0；VALIDATION选阈值并与其他finalist一起参与选择，TEST封存后一次评估。
+RULE基线先以TRAIN的mean/std反标准化，四个信号为48h cart(第10维)>0、48h buy(第9维)>0、48h fav(第11维)>0、第18维>0；VALIDATION选阈值并与其他finalist一起参与选择，TEST封存后一次评估。GBDT finalist同样以VALIDATION选阈值，与其余四个算法共同进入select()，封存后与其他finalist一起在TEST上只评估一次。
 
 先封存全部配置、阈值和selected，再对TEST一次评估；同配置失败重试保留记录，不得据TEST调参。cohort单类别时AP/AUC=NULL并给原因，不伪报0；其余可定义指标照报。总体测试必须两类。无预测正例时Precision=0；无真实正例时Recall=NULL；Precision+Recall=0且Recall可定义时F1=0，Recall不可定义时F1=NULL。校准桶左闭右开，最后一桶含1，空桶计数0、均值NULL。
 
-FORECAST使用selected的同一评估checkpoint（只在TRAIN学习），以12-04 00:00为锚点评分过去48h活跃人群，预测12-04全天；原数据到12-04边界为止，label=NULL。不进行FULLFIT，不把TEST参与再训练；页面明确这是历史数据上的未来窗口演示，不是对当前现实日期的预测。TEST页可查三模型，FORECAST仅默认模型。
+FORECAST使用selected的同一评估checkpoint（只在TRAIN学习），以12-04 00:00为锚点评分过去48h活跃人群，预测12-04全天；原数据到12-04边界为止，label=NULL。不进行FULLFIT，不把TEST参与再训练；页面明确这是历史数据上的未来窗口演示，不是对当前现实日期的预测。TEST页可查全部finalist（含GBDT，若被选中则FORECAST也使用GBDT），FORECAST仅默认模型。
 
 ## CPU/GPU可比实验
 
@@ -51,6 +54,6 @@ FORECAST使用selected的同一评估checkpoint（只在TRAIN学习），以12-0
 
 记录三次中位耗时、样本/秒、allocated/reserved峰值、整卡占用、进程RSS、型号、驱动、torch CUDA runtime、功耗/温度可获得值；无法取得的遥测为null并解释。speedup=CPU中位耗时/GPU中位耗时，不要求>1。相同初始权重与batch第一步loss差≤1e-4；训练全过程有限、有真实梯度及参数更新；不强制每步loss下降。
 
-产物：manifest、config、hardware、environment锁引用、normalization、training_history、state_dict、resume_checkpoint、validation_metrics、封存test_metrics、prediction清单。CONSTANT/RULE保存rules.json（正例率/16组规则表），不伪造state_dict；LOGISTIC/GRU保存state_dict，resume_checkpoint仅用于可训练模型。文中沿用checkpoint对固定基线指沿用同一rules.json。算法、样本hash、split、阈值、selected原因、实际精度、种子方差和资源降级均可审计。FORECAST页面注明分数为模型打分、未做概率校准，且输入为周末历史、训练集仅含工作日。
+产物：manifest、config、hardware、environment锁引用、normalization、training_history、state_dict、resume_checkpoint、validation_metrics、封存test_metrics、prediction清单。CONSTANT/RULE保存rules.json（正例率/16组规则表），不伪造state_dict；LOGISTIC/GRU保存state_dict，resume_checkpoint仅用于可训练模型；GBDT保存model.json（箱边界/树节点/base_score，校验sha256）与history.json，不伪造state_dict或resume_checkpoint。文中沿用checkpoint对固定基线指沿用同一rules.json，对GBDT指同一model.json。算法、样本hash、split、阈值、selected原因、实际精度、种子方差和资源降级均可审计。FORECAST页面注明分数为模型打分、未做概率校准，且输入为周末历史、训练集仅含工作日。
 
 技术参考：[PyTorch AMP](https://docs.pytorch.org/docs/2.15/notes/amp_examples.html)说明autocast与梯度缩放；[DataLoader](https://docs.pytorch.org/docs/2.15/data.html)说明分批加载与worker行为。具体结构、预算和选择规则均为本项目设计，不是官方性能保证。

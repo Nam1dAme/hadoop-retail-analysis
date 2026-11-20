@@ -1,4 +1,4 @@
-# 数据库迁移说明（001—008）
+# 数据库迁移说明（001—010）
 
 使用本项目 migrator 账号运行迁移：
 
@@ -18,6 +18,8 @@ scripts/behaviorctl --baseline UBA-DOC-1.0.0 --credentials var/secrets/migrator.
 - **006_entity_rank_index.sql**：为 `entity_daily` 增加按日排行复合索引 `entity_rank_daily(release_id, entity_type, behavior_type, date, event_count DESC, entity_id ASC)`。
 - **007_entity_lookup_index.sql**：替换 `entity_daily` 冗余索引，新增实体趋势查询索引 `entity_lookup(release_id, entity_type, entity_id, behavior_type, date, event_count)`。
 - **008_api_query_indexes.sql**：为 API 常用查询路径补充复合索引：`task_run(batch_id, created_at, run_id)`、`data_release(status, published_at, release_id)` 与 `benchmark(experiment_id, device, repeat_index)`（使用 `CREATE INDEX IF NOT EXISTS`）。
+- **009_model_protocol.sql**：扩展 `model_metric.cohort` 与 `model_run.algorithm` 字段，纳入 `RULE` 基线。
+- **010_gbdt.sql**：将 `model_run.algorithm` 的 ENUM 扩展为包含 `GBDT` 直方图梯度提升基线。
 
 ## 时间与时区语义
 

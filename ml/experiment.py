@@ -8,12 +8,13 @@ import torch
 from orchestration.common import ROOT, atomic_json, fingerprint, sha, now, stamp, encode, commit, ManifestError
 from orchestration.storage import Hdfs
 from .models import seed_all, make_model, rule_group_codes, NUMERIC_DIM
-from .training import fit, score, record_metrics, trusted_load, hardware
+from .training import fit, score, record_metrics, trusted_load, hardware, resource_usage
 from .metrics import choose_threshold, evaluate_file
+from . import gbdt as gbdt_lib
 from .shards import ShardDataset
 from .benchmark import run_benchmark
 
-ALGORITHM_ORDER = {'CONSTANT': 0, 'LOGISTIC': 1, 'GRU': 2, 'RULE': 3}
+ALGORITHM_ORDER = {'CONSTANT': 0, 'LOGISTIC': 1, 'GRU': 2, 'RULE': 3, 'GBDT': 4}
 
 
 def _selection_key(item):
@@ -139,6 +140,77 @@ def rule(lease, experiment, train, validation, directory, sample_hash, seed=42):
     return result
 
 
+def gbdt(lease, experiment, train, validation, directory, sample_hash, seed=42):
+    """Histogram GBDT baseline; TRAIN-only binning, VALIDATION-only early stopping."""
+    identity = dict(schema_version='gbdt-v1', algorithm='GBDT', seed=seed, sample_hash=sample_hash,
+                    params=dict(gbdt_lib.DEFAULT_PARAMS),
+                    implementation=fingerprint({str(p.relative_to(ROOT)): sha(p)
+                                               for p in sorted((ROOT/'ml').glob('*.py')) if p.name != 'benchmark.py'}))
+    config_hash = fingerprint(identity)
+    with lease.db.cursor() as q:
+        q.execute('SELECT * FROM model_run WHERE experiment_id=%s AND algorithm=%s AND config_hash=%s',
+                  (experiment, 'GBDT', config_hash))
+        row = q.fetchone()
+        if row and row['status'] == 'SUCCEEDED':
+            path = Path(row['checkpoint_path'])
+            if sha(path) != row['checkpoint_hash']:
+                raise ManifestError('GBDT checkpoint changed')
+            result = json.loads((path.parent/'manifest.json').read_text())
+            for file in result['outputs']:
+                if sha(path.parent/file['path']) != file['sha256']:
+                    raise ManifestError('Successful GBDT artifact changed')
+            return result
+        model_id = row['model_run_id'] if row else str(uuid.uuid4())
+        local = Path(directory)/model_id
+        local.mkdir(parents=True, exist_ok=True)
+        if not row:
+            q.execute('INSERT INTO model_run(model_run_id,experiment_id,algorithm,status,seed,config_hash,config_json,device,parameter_count,hardware_json,created_at,updated_at) VALUES(%s,%s,%s,%s,%s,%s,%s,%s,0,%s,%s,%s)',
+                      (model_id, experiment, 'GBDT', 'RUNNING', seed, config_hash, encode(identity), 'cpu', '{}', now(), now()))
+        else:
+            q.execute('UPDATE model_run SET status=%s,updated_at=%s WHERE model_run_id=%s', ('RUNNING', now(), model_id))
+    started = time.monotonic()
+    try:
+        atomic_json(local/'config.json', identity)
+        model = gbdt_lib.fit(train, validation, seed=seed, **identity['params'])
+        atomic_json(local/'history.json', model['history'])
+        checkpoint = local/'model.json'
+        checkpoint_hash = gbdt_lib.save(model, checkpoint)
+        device = torch.device('cpu')
+        score(validation, None, device, 'GBDT', local/'validation.npy', gbdt=model, lease=lease)
+        data = np.load(local/'validation.npy', mmap_mode='r', allow_pickle=False)
+        threshold = choose_threshold(data['score'], data['label'])
+        values = evaluate_file(local/'validation.npy', threshold)
+        atomic_json(local/'validation_metrics.json', values)
+        record_metrics(lease.db, model_id, 'VALIDATION', values, sha(local/'validation.npy'))
+        # Tree-level history is exposed through model_epoch for the same UI as torch models.
+        with lease.db.cursor() as q:
+            for entry in model['history']:
+                q.execute('INSERT INTO model_epoch VALUES(%s,%s,%s,NULL,%s,0,%s,0,0) ON DUPLICATE KEY UPDATE train_loss=VALUES(train_loss),validation_logloss=VALUES(validation_logloss),sample_count=VALUES(sample_count)',
+                          (model_id, entry['tree'], entry['train_logloss'], entry['validation_logloss'],
+                           train.manifest['rows']))
+        usage = resource_usage(device)
+        leaf_count = sum(1 for tree in model['trees'] for node in tree['nodes'] if node['feature'] < 0)
+        result = dict(status='SUCCEEDED', model_run_id=model_id, experiment_id=experiment, algorithm='GBDT',
+                      config=identity, code_commit=commit(), sample_hash=sample_hash,
+                      checkpoint_path=str(checkpoint), checkpoint_hash=checkpoint_hash,
+                      validation_scores=str(local/'validation.npy'), parameter_count=leaf_count,
+                      best_epoch=model['best_iteration'], validation_logloss=model['validation_logloss'],
+                      threshold=threshold, validation_metrics=values,
+                      training_seconds=time.monotonic()-started, hardware=hardware(device), **usage)
+        result['outputs'] = [dict(path=str(p.relative_to(local)), sha256=sha(p), bytes=p.stat().st_size)
+                             for p in sorted(local.iterdir()) if p.is_file() and p.name != 'manifest.json']
+        atomic_json(local/'manifest.json', result)
+        with lease.db.cursor() as q:
+            q.execute('UPDATE model_run SET status=%s,checkpoint_path=%s,checkpoint_hash=%s,threshold=%s,best_epoch=%s,training_seconds=%s,rss_mib=%s,updated_at=%s WHERE model_run_id=%s',
+                      ('SUCCEEDED', str(checkpoint), checkpoint_hash, threshold, model['best_iteration'],
+                       result['training_seconds'], usage['rss_mib'], now(), model_id))
+        return result
+    except BaseException:
+        with lease.db.cursor() as q:
+            q.execute('UPDATE model_run SET status=%s,updated_at=%s WHERE model_run_id=%s', ('FAILED', now(), model_id))
+        raise
+
+
 def run_experiment(lease, sample_index, benchmark=True):
     sample_index = Path(sample_index)
     source = json.loads(sample_index.read_text())
@@ -177,12 +249,13 @@ def run_experiment(lease, sample_index, benchmark=True):
         if benchmark:
             run_benchmark(lease, train, experiment, directory)
         candidates = [constant(lease, experiment, train, validation, directory, row['sample_hash']),
-                      rule(lease, experiment, train, validation, directory, row['sample_hash'])]
+                      rule(lease, experiment, train, validation, directory, row['sample_hash']),
+                      gbdt(lease, experiment, train, validation, directory, row['sample_hash'])]
         for algorithm in ('LOGISTIC', 'GRU'):
             for rate in (.001, .0003):
                 candidates.append(fit(lease, experiment, train, validation, algorithm, rate, directory, row['sample_hash']))
         finalists = [select([x for x in candidates if x['algorithm'] == algorithm])
-                     for algorithm in ('CONSTANT', 'LOGISTIC', 'GRU', 'RULE')]
+                     for algorithm in ('CONSTANT', 'LOGISTIC', 'GRU', 'RULE', 'GBDT')]
         winner = select(finalists)
         # Extra seeds reuse each finalist's frozen hyperparameters and never enter selection.
         extra_runs = [fit(lease, experiment, train, validation, item['algorithm'],
@@ -220,19 +293,22 @@ def run_experiment(lease, sample_index, benchmark=True):
         else:
             algorithm = item['algorithm']
             model = None
+            gbdt_model = None
             device = torch.device('cuda' if algorithm == 'GRU' else 'cpu')
             if algorithm in ('LOGISTIC', 'GRU'):
                 model = make_model(algorithm).to(device)
                 model.load_state_dict(trusted_load(item['checkpoint_path'], item['checkpoint_hash'], directory))
+            if algorithm == 'GBDT':
+                gbdt_model = gbdt_lib.load_model(item['checkpoint_path'], item['checkpoint_hash'], directory)
             rule_config = item['config'].get('rule') if algorithm == 'RULE' else None
             if algorithm == 'RULE' and not rule_config:
                 raise ManifestError('RULE test scoring requires the frozen rule table')
             result = score(test, model, device, algorithm, test_path,
-                           rate=item['config'].get('rate'), rule=rule_config, lease=lease)
+                           rate=item['config'].get('rate'), rule=rule_config, gbdt=gbdt_model, lease=lease)
             values = evaluate_file(test_path, item['threshold'])
             atomic_json(metrics_path, values)
             atomic_json(test_manifest, dict(**result, checkpoint_hash=item['checkpoint_hash'], threshold=item['threshold']))
-            del model
+            del model, gbdt_model
             if device.type == 'cuda':
                 torch.cuda.empty_cache()
         record_metrics(lease.db, item['model_run_id'], 'TEST', values, sha(test_path))

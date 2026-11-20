@@ -106,7 +106,7 @@ def publish_pointer(db,release_id,expected_generation,operator='behavior-cli',ac
             if action=='PUBLISH':
                 q.execute('SELECT dataset,complete FROM release_load WHERE release_id=%s',(release_id,));parts=q.fetchall()
                 expected=set(datasets) if datasets is not None else BASE_DATASETS | {
-                    'TEST-CONSTANT','TEST-LOGISTIC','TEST-GRU','TEST-RULE'}
+                    'TEST-CONSTANT','TEST-LOGISTIC','TEST-GRU','TEST-RULE','TEST-GBDT'}
                 if {x['dataset'] for x in parts}!=expected or not all(x['complete'] for x in parts):raise ManifestError('Incomplete release datasets')
                 q.execute("UPDATE data_release SET status='READY',published_at=COALESCE(published_at,%s) WHERE release_id=%s",(now(),release_id))
             q.execute('UPDATE current_release SET release_id=%s,generation=generation+1 WHERE singleton_id=1 AND generation=%s',(release_id,expected_generation))
