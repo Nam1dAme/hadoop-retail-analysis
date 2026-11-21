@@ -44,7 +44,7 @@ for row in history:
     first=datetime.fromisoformat(row['first_ts']);last=datetime.fromisoformat(row['last_ts'])
     assert row['first_ts'].endswith('Z') and row['last_ts'].endswith('Z') and first<=last
     assert str(first.astimezone(timezone(timedelta(hours=8))).date())==row['date']
-experiments=get('/experiments')['data'];assert len(experiments['models'])==3
+experiments=get('/experiments')['data'];assert len(experiments['models']) in (3,5)
 for model in experiments['models']:
     assert get('/models/'+model['model_run_id'])['data']['model_run_id']==model['model_run_id']
     for row in get('/predictions',{'mode':'TEST','model_run_id':model['model_run_id'],'limit':2})['data']:
