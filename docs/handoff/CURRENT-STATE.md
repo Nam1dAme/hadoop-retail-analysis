@@ -3,7 +3,7 @@
 ## 当前状态
 
 - **工程主线**：M0–M7 主流程已完整实现，覆盖数据导入、Hadoop `J01`–`J06` MapReduce、`CONSTANT`/`RULE`/`GBDT`/`LOGISTIC`/`GRU` 评测与 CUDA 加速、原子发布与回滚、FastAPI 只读服务、Streamlit 七页中文工作台。
-- **当前活跃开发分支**：`fix/ml-evaluation-v2`（样本 v2 双日测试集 + 20 维特征 + `RULE`/`GBDT` + `J01` map-only 优化 + `011` 双日主键与校验修复），详细进度见 [HANDOFF-2026-11-20.md](HANDOFF-2026-11-20.md)。
+- **当前活跃开发分支**：`fix/ml-evaluation-v2`（已完成样本 v2 双日测试集、20 维特征、`RULE`/`GBDT`、2 层 128 维 GRU 与 RTX 4060 加速、Hadoop `J01`–`J06` 全量重跑、`011` 迁移、正式版本 `Release 4583b1cf` 原子发布及全量验收；最新交接见 [HANDOFF-2026-11-23.md](HANDOFF-2026-11-23.md)，历史记录见 [HANDOFF-2026-11-20.md](HANDOFF-2026-11-20.md)）。
 - **近期清理与重构**：
   - `scripts/` 已移除一次性里程碑/交接脚本，统一从 `config/development.toml` 读取端口与连接参数（经 `scripts/_common.py` 提供默认回退），去除了硬编码本机路径、GPU 型号及系统发行版断言，并合并了重复的 MariaDB `.cnf` 生成逻辑。
   - `tests/` 已将共享 `api` fixture 提取到 `tests/conftest.py`（解决跨文件导入导致重复建表插数的问题，并兼容空 `data_batch` 表），移除了依赖旧版固定 UUID 的过期脚本。
