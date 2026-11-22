@@ -9,6 +9,7 @@ from .control import alive,live_java
 from .storage import Hdfs,JAR,run_job,application,discover
 
 STAGES=('J01','J02','J03','J03rank','J04users','J04summary','J05','J06')
+PROFILE_KEYS=('user_count_all','item_count_all','category_count_all','duplicate_groups','duplicate_extra','multi_category_items','occupied_category_buckets','collision_buckets','colliding_categories')
 
 def validate(storage,path,expected=None):
     manifest=storage.json(path+'/manifest.json')
@@ -28,9 +29,15 @@ def latest(db,batch,stage):
         q.execute("SELECT * FROM task_run WHERE batch_id=%s AND stage=%s AND status='SUCCEEDED' ORDER BY finished_at DESC LIMIT 1",(batch,stage));return q.fetchone()
 
 
+def environment_fingerprint():
+    data=json.loads((ROOT/'config/environment.lock.json').read_text())
+    stable={k:data[k] for k in ('baseline','java','hadoop','python','packages','database','uv_lock_sha256','toolchain_lock_sha256','config_hashes') if k in data}
+    return fingerprint(stable)
+
+
 def stage_run(lease,batch,stage,inputs,parameters,executor=None):
     lease.guard();db=lease.db;storage=Hdfs(lease.config,lease)
-    env_hash=sha(ROOT/'config/environment.lock.json');code=commit()
+    env_hash=environment_fingerprint();code=commit()
     implementation=implementation_fingerprint()
     previous_implementation=getattr(lease,'implementation',implementation)
     if previous_implementation!=implementation:raise ConfigError('Runtime source changed during pipeline; resume from committed code')
@@ -128,13 +135,18 @@ def apply_quality(lease,batch,clean,profile=None):
         q.execute('SELECT raw_rows FROM data_batch WHERE batch_id=%s',(batch,));expected=q.fetchone()['raw_rows']
         if expected!=n['raw_rows']:raise ManifestError('Source row count differs from Hadoop RecordReader')
     passed=n['raw_rows']>0 and n['accepted_rows']>0 and n['rejected_rows']*1000<=n['raw_rows'] and n['outside_rows']*100<=n['accepted_rows']
-    data={'rows':n,'gate_passed':passed,'profile':{k:0 for k in ('user_count_all','item_count_all','category_count_all','duplicate_groups','duplicate_extra','multi_category_items','occupied_category_buckets','collision_buckets','colliding_categories')}}
+    data={'rows':n,'gate_passed':passed,'profile':{k:0 for k in PROFILE_KEYS}}
     for group in ('BEHAVIOR','REJECTIONS','DAILY'):
         with lease.db.cursor() as q:
             for name,value in clean['counters'].get(group,{}).items():q.execute('INSERT INTO quality_metric VALUES(%s,%s,%s,%s,%s) ON DUPLICATE KEY UPDATE value=VALUES(value),detail_json=VALUES(detail_json)',(batch,name,group,value,'{}'))
     if profile:
+        # PROFILE 计数器在所有 reducer 合并后即为全局总量，作为汇总的唯一权威来源；
+        # 仍读取输出的 timestamp_min/max，且 PROFILE 计数器缺失时回退为旧版逐文件求和。
+        counters=profile['counters'].get('PROFILE',{})
         for line in Hdfs(lease.config,lease).dump(files(profile)):
-            key,value=line.split('\t');data['profile'][key]=data['profile'].get(key,0)+int(value)
+            key,value=line.split('\t')
+            if key in ('timestamp_min','timestamp_max') or not counters:data['profile'][key]=data['profile'].get(key,0)+int(value)
+        for key in PROFILE_KEYS:data['profile'][key]=counters.get(key,0) if counters else data['profile'][key]
         if profile['counters'].get('PROFILE_INPUT',{}).get('rows',0)!=n['accepted_rows']:raise ManifestError('Profile input differs from facts')
         with lease.db.cursor() as q:
             for key,value in data['profile'].items():q.execute('INSERT INTO quality_metric VALUES(%s,%s,%s,%s,%s) ON DUPLICATE KEY UPDATE value=VALUES(value)',(batch,key,'PROFILE',value,'{}'))

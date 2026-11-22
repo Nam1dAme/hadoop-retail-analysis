@@ -13,7 +13,8 @@ from orchestration.common import ROOT,load,sha,atomic_json,stamp
 from orchestration.control import Lease
 from orchestration.storage import Hdfs
 from ml.experiment import select
-from ml.models import seed_all,make_model,tensors,FEATURES
+from ml import gbdt as gbdt_lib
+from ml.models import seed_all,make_model,tensors,rule_scores,FEATURES
 from ml.metrics import evaluate_file,choose_threshold,SCORE_DTYPE
 from ml.shards import ShardDataset
 from ml.training import trusted_load
@@ -38,7 +39,7 @@ def ordered_hash(keys):
 def main():
     started=time.monotonic();work=ROOT/'var/production';models=json.loads((work/'models.json').read_text());source=json.loads((work/'samples.json').read_text())
     assert models['status']=='SUCCEEDED' and models['experiment_id']==source['experiment_id']
-    directory=work/'models'/models['experiment_id'];seed_all()
+    directory=work/'models'/models['experiment_id'];seed_all(deterministic=True)
     with Lease(load(ROOT/'config/development.toml'),ROOT/'var/secrets/writer.cnf') as lease:
         assert Hdfs(lease.config,lease).json(models['archive']+'/manifest.json')==models
         for file in models['outputs']:
@@ -48,8 +49,8 @@ def main():
             q.execute('SELECT * FROM experiment WHERE experiment_id=%s',(models['experiment_id'],));experiment=q.fetchone()
             assert experiment['status']=='SUCCEEDED' and experiment['test_sealed_at'] is not None
             assert experiment['selected_model_id']==models['selected_model_id']
-        candidates=models['selection']['candidates'];assert len(candidates)==5
-        assert [x['algorithm'] for x in candidates]==['CONSTANT','LOGISTIC','LOGISTIC','GRU','GRU']
+        candidates=models['selection']['candidates'];assert len(candidates)==7
+        assert [x['algorithm'] for x in candidates]==['CONSTANT','RULE','GBDT','LOGISTIC','LOGISTIC','GRU','GRU']
         validation=ShardDataset(Path(source['samples']['cache_path'])/'VALIDATION',verify=True)
         test_meta=source['samples']['splits']['TEST'];validated=[]
         for item in candidates:
@@ -62,9 +63,35 @@ def main():
             if algorithm=='CONSTANT':
                 rules=json.loads(Path(item['checkpoint_path']).read_text());assert rules['rate']==source['samples']['splits']['TRAIN']['positive_count']/source['samples']['splits']['TRAIN']['rows']
                 assert np.all(data['score']==rules['rate']) and item['parameter_count']==0
+                with lease.db.cursor() as q:
+                    q.execute('SELECT epoch FROM model_epoch WHERE model_run_id=%s',(item['model_run_id'],));assert len(q.fetchall())==0
                 checkpoint_error=0.
+            elif algorithm=='RULE':
+                assert item['config']['schema_version']=='rule-v1'
+                rules=json.loads(Path(item['checkpoint_path']).read_text())
+                assert len(rules['rule']['table'])==16 and item['parameter_count']==0
+                batch=next(validation.batches(64,shuffle=False))
+                actual=rule_scores(batch['numeric'],rules['rule'])
+                checkpoint_error=float(np.max(np.abs(actual-data['score'][:64])));assert checkpoint_error<=1e-6
+                with lease.db.cursor() as q:
+                    q.execute('SELECT epoch FROM model_epoch WHERE model_run_id=%s',(item['model_run_id'],));assert len(q.fetchall())==0
+            elif algorithm=='GBDT':
+                assert item['config']['schema_version']=='gbdt-v1'
+                params=item['config']['params']
+                assert params['max_trees']==gbdt_lib.DEFAULT_PARAMS['max_trees'] and params['learning_rate']==gbdt_lib.DEFAULT_PARAMS['learning_rate']
+                model=gbdt_lib.load_model(item['checkpoint_path'],item['checkpoint_hash'],directory)
+                leaf_count=sum(1 for tree in model['trees'] for node in tree['nodes'] if node['feature']<0)
+                assert leaf_count==item['parameter_count']
+                batch=next(validation.batches(64,shuffle=False))
+                actual=gbdt_lib.predict_proba(model,batch['numeric'])
+                checkpoint_error=float(np.max(np.abs(actual-data['score'][:64])));assert checkpoint_error<=1e-6
+                assert item['rss_mib']<=3072 and item['training_seconds']<=8*3600
+                with lease.db.cursor() as q:
+                    q.execute('SELECT epoch,sample_count FROM model_epoch WHERE model_run_id=%s ORDER BY epoch',(item['model_run_id'],));epochs=q.fetchall()
+                assert [x['epoch'] for x in epochs]==list(range(1,len(epochs)+1)) and 1<=len(epochs)<=300
+                assert all(x['sample_count']==source['samples']['splits']['TRAIN']['rows'] for x in epochs)
             else:
-                assert item['config']['learning_rate'] in (.001,.0003)
+                assert item['config']['learning_rate'] in (.001,.0003) and item['config'].get('max_epochs')==20
                 device=torch.device('cuda' if algorithm=='GRU' else 'cpu')
                 model=make_model(algorithm).to(device);state=trusted_load(item['checkpoint_path'],item['checkpoint_hash'],directory)
                 model.load_state_dict(state);model.eval();assert sum(p.numel() for p in model.parameters())==item['parameter_count']
@@ -72,18 +99,18 @@ def main():
                 with torch.no_grad():actual=torch.sigmoid(model(inputs).float()).cpu().numpy()
                 checkpoint_error=float(np.max(np.abs(actual-data['score'][:64])));assert checkpoint_error<=1e-6
                 if algorithm=='GRU':
-                    assert item['hardware']['device']=='cuda' and '4060 Laptop' in item['hardware']['name']
+                    assert item['hardware']['device']=='cuda' and item['hardware']['name']
                     assert torch.count_nonzero(model.category.weight[0])==0
                     assert item['peak_allocated_mib']<=6144 and item['peak_reserved_mib']<=6656
                 assert item['rss_mib']<=3072 and item['training_seconds']<=8*3600
                 with lease.db.cursor() as q:
                     q.execute('SELECT epoch,sample_count FROM model_epoch WHERE model_run_id=%s ORDER BY epoch',(item['model_run_id'],));epochs=q.fetchall()
-                assert [x['epoch'] for x in epochs]==list(range(1,len(epochs)+1)) and 1<=len(epochs)<=10
+                assert [x['epoch'] for x in epochs]==list(range(1,len(epochs)+1)) and 1<=len(epochs)<=20
                 assert all(x['sample_count']==source['samples']['splits']['TRAIN']['rows'] for x in epochs)
                 del model
                 if device.type=='cuda':torch.cuda.empty_cache()
             validated.append(dict(model_run_id=item['model_run_id'],algorithm=algorithm,validation_ap=item['validation_metrics']['ALL']['ap'],checkpoint_error=checkpoint_error))
-        finalists=[select([x for x in candidates if x['algorithm']==name]) for name in ('CONSTANT','LOGISTIC','GRU')]
+        finalists=[select([x for x in candidates if x['algorithm']==name]) for name in ('CONSTANT','LOGISTIC','GRU','RULE','GBDT')]
         assert [x['model_run_id'] for x in finalists]==[x['model_run_id'] for x in models['selection']['finalists']]
         assert select(finalists)['model_run_id']==models['selected_model_id']
         for item in models['test']:

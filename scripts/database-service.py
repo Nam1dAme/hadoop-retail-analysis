@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
 """复用系统MariaDB程序，管理本项目独立实例，不接触系统实例。"""
 import argparse
-import configparser
 import getpass
-import os
 from pathlib import Path
-import secrets
 import subprocess
+import sys
 import time
 import pymysql
 
-ROOT=Path(__file__).resolve().parents[1]
+sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
+from scripts._common import ROOT,db_endpoint,ensure_db_secret,load_dev_config
+
 BASE=ROOT/'var/mariadb'
 SOCKET=BASE/'server.sock'
 SECRET=ROOT/'var/secrets'
@@ -28,10 +28,11 @@ def start():
     if running():return
     BASE.mkdir(parents=True,exist_ok=True)
     if not (BASE/'data/mysql').is_dir():raise SystemExit('请先执行 init')
+    host,port,_=db_endpoint(load_dev_config())
     with (BASE/'launcher.log').open('ab') as log:
         subprocess.Popen(['/usr/sbin/mariadbd','--no-defaults',f'--datadir={BASE}/data',
             f'--socket={SOCKET}',f'--pid-file={BASE}/server.pid',f'--log-error={BASE}/server.log',
-            '--bind-address=127.0.0.1','--port=3307','--innodb-buffer-pool-size=256M',
+            f'--bind-address={host}',f'--port={port}','--innodb-buffer-pool-size=256M',
             '--max-connections=30','--character-set-server=utf8mb4','--collation-server=utf8mb4_bin',
             '--skip-name-resolve'],stdout=log,stderr=log,start_new_session=True)
     for _ in range(100):
@@ -48,22 +49,15 @@ def init():
             '--auth-root-authentication-method=socket',f'--auth-root-socket-user={getpass.getuser()}',
             '--skip-test-db'],check=True,stdout=subprocess.DEVNULL)
     start()
-    SECRET.mkdir(parents=True,exist_ok=True,mode=0o700)
+    host,port,db_name=db_endpoint(load_dev_config())
     with connect() as c, c.cursor() as q:
-        q.execute('CREATE DATABASE IF NOT EXISTS behavior_analytics CHARACTER SET utf8mb4 COLLATE utf8mb4_bin')
+        q.execute(f'CREATE DATABASE IF NOT EXISTS {db_name} CHARACTER SET utf8mb4 COLLATE utf8mb4_bin')
         for role,grants in [('reader','SELECT'),('writer','SELECT, INSERT, UPDATE, DELETE'),('migrator','ALL PRIVILEGES')]:
-            path=SECRET/f'{role}.cnf'
-            if path.exists():
-                cfg=configparser.ConfigParser();cfg.read(path);password=cfg['client']['password']
-            else:
-                password=secrets.token_hex(24)
-                text=f'[client]\nuser=behavior_{role}\npassword={password}\nhost=127.0.0.1\nport=3307\ndatabase=behavior_analytics\n'
-                fd=os.open(path,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600)
-                with os.fdopen(fd,'w') as f:f.write(text)
             user=f'behavior_{role}'
-            q.execute('CREATE USER IF NOT EXISTS %s@%s IDENTIFIED BY %s',(user,'127.0.0.1',password))
+            password=ensure_db_secret(SECRET/f'{role}.cnf',user,db_name,host=host,port=port)
+            q.execute('CREATE USER IF NOT EXISTS %s@%s IDENTIFIED BY %s',(user,host,password))
             effective='SELECT' if role=='writer' and (SECRET/'loader.cnf').exists() else grants
-            q.execute(f'GRANT {effective} ON behavior_analytics.* TO %s@%s',(user,'127.0.0.1'))
+            q.execute(f'GRANT {effective} ON {db_name}.* TO %s@%s',(user,host))
     print('独立数据库及三个项目账号已就绪；凭据仅写入var/secrets')
 
 def main():
@@ -74,8 +68,12 @@ def main():
         if running():
             with connect() as c, c.cursor() as q:q.execute('SHUTDOWN')
     else:
-        with connect() as c,c.cursor() as q:
-            q.execute('SELECT VERSION(), @@port, @@innodb_buffer_pool_size, @@max_connections')
-            print(q.fetchone())
+        try:
+            with connect() as c,c.cursor() as q:
+                q.execute('SELECT VERSION(), @@port, @@innodb_buffer_pool_size, @@max_connections')
+                print(q.fetchone())
+        except pymysql.MySQLError as err:
+            print(f'数据库未运行 ({err})')
+            raise SystemExit(1)
 
 if __name__=='__main__':main()

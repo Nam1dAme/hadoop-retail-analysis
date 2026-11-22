@@ -1,3 +1,4 @@
+from datetime import datetime,timedelta,timezone
 import json
 from pathlib import Path
 import time
@@ -7,6 +8,26 @@ from orchestration.pipeline import stage_run
 from ml.models import make_model
 from ml.training import score,trusted_load
 from ml.shards import ShardDataset
+from ml import gbdt as gbdt_lib
+
+
+def _forecast_window(lease,sample,data):
+    cfg=lease.config.get('forecast',{})
+    split_meta=sample.get('samples',{}).get('splits',{}).get('FORECAST',{})
+    as_of=cfg.get('as_of') or sample.get('as_of') or split_meta.get('as_of')
+    window_end=cfg.get('window_end') or sample.get('window_end') or split_meta.get('window_end')
+    if not as_of and data.manifest.get('shards'):
+        import numpy as np
+        shard_dir=Path(sample['samples']['cache_path'])/'FORECAST'/data.manifest['shards'][0]['directory']
+        ts=int(np.load(shard_dir/'as_of.npy',mmap_mode='r',allow_pickle=False)[0])
+        dt=datetime.fromtimestamp(ts,timezone.utc)
+        as_of=dt.strftime('%Y-%m-%dT%H:%M:%SZ')
+        window_end=window_end or (dt+timedelta(days=1)).strftime('%Y-%m-%dT%H:%M:%SZ')
+    if not as_of:raise ManifestError('Cannot determine forecast as_of from the sample shards or configuration')
+    if not window_end:
+        dt=datetime.fromisoformat(as_of.replace('Z','+00:00'))
+        window_end=(dt+timedelta(days=1)).strftime('%Y-%m-%dT%H:%M:%SZ')
+    return as_of,window_end
 
 
 def forecast(lease,index=None):
@@ -23,22 +44,27 @@ def forecast(lease,index=None):
     algorithm=selected['algorithm'];device=torch.device('cuda' if algorithm=='GRU' else 'cpu')
     def produce(storage,temp,work,run):
         started=time.monotonic();data=ShardDataset(Path(sample['samples']['cache_path'])/'FORECAST',verify=True)
-        model=None
-        if algorithm!='CONSTANT':
+        model=None;gbdt_model=None
+        if algorithm in ('LOGISTIC','GRU'):
             model=make_model(algorithm).to(device)
             model.load_state_dict(trusted_load(selected['checkpoint_path'],selected['checkpoint_hash'],ROOT/'var/production/models'))
-        scores=score(data,model,device,algorithm,local/'forecast.npy',rate=selected['config'].get('rate'),lease=lease)
+        if algorithm=='GBDT':
+            gbdt_model=gbdt_lib.load_model(selected['checkpoint_path'],selected['checkpoint_hash'],ROOT/'var/production/models')
+        rule=selected['config'].get('rule') if algorithm=='RULE' else None
+        if algorithm=='RULE' and not rule:raise ManifestError('RULE forecast requires the frozen rule table')
+        scores=score(data,model,device,algorithm,local/'forecast.npy',rate=selected['config'].get('rate'),rule=rule,gbdt=gbdt_model,lease=lease)
         import numpy as np
         arr=np.load(local/'forecast.npy',mmap_mode='r',allow_pickle=False)
         if not (arr['label']==-1).all() or len(arr)!=sample['samples']['splits']['FORECAST']['rows']:
             raise ManifestError('Forecast population or unobserved labels differ')
+        as_of,window_end=_forecast_window(lease,sample,data)
         result=dict(status='SUCCEEDED',experiment_id=models['experiment_id'],batch_id=models['batch_id'],model_run_id=selected['model_run_id'],
                     algorithm=algorithm,checkpoint_hash=selected['checkpoint_hash'],threshold=selected['threshold'],
-                    as_of='2017-12-03T16:00:00Z',window_end='2017-12-04T16:00:00Z',
+                    as_of=as_of,window_end=window_end,
                     scores=scores,rows=scores['rows'],labels='UNOBSERVED',seconds=time.monotonic()-started,created_at=stamp())
         atomic_json(local/'forecast.json',result)
         storage.put(local/'forecast.npy',temp+'/forecast.npy');storage.put(local/'forecast.json',temp+'/forecast.json')
-        del model
+        del model,gbdt_model
         if device.type=='cuda':torch.cuda.empty_cache()
         return {'forecast':result}
     params=dict(experiment_id=models['experiment_id'],model_run_id=selected['model_run_id'],checkpoint_hash=selected['checkpoint_hash'],

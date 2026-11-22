@@ -104,4 +104,8 @@
     <name>yarn.resourcemanager.work-preserving-recovery.enabled</name>
     <value>false</value>
   </property>
+  <property>
+    <name>yarn.log-aggregation-enable</name>
+    <value>true</value>
+  </property>
 </configuration>

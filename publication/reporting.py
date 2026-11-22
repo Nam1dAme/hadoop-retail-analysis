@@ -18,12 +18,19 @@ def materialize_calibration(lease):
             result=json.loads(path.read_text())
             score_path=Path(item['validation_scores']) if split=='VALIDATION' else directory/item['model_run_id']/'test.npy'
             evaluation_hash=sha(score_path)
-            with lease.db.cursor() as q:
-                for cohort,metrics in result.items():
-                    bins=metrics['calibration']
-                    if metrics['sample_count'] and (len(bins)!=10 or sum(b['count'] for b in bins)!=metrics['sample_count']):
-                        raise ManifestError('Calibration population differs')
-                    for index,bin in enumerate(bins):
-                        for key in ('count','mean_score','observed_rate'):
-                            q.execute('INSERT INTO model_metric VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s) ON DUPLICATE KEY UPDATE value=VALUES(value),evaluation_hash=VALUES(evaluation_hash)',
-                                      (item['model_run_id'],split,cohort,f'calibration_{index}_{key}',bin[key],metrics['sample_count'],metrics['positive_count'],metrics.get('reason'),evaluation_hash))
+            rows=[]
+            for cohort,metrics in result.items():
+                bins=metrics['calibration']
+                if metrics['sample_count'] and (len(bins)!=10 or sum(b['count'] for b in bins)!=metrics['sample_count']):
+                    raise ManifestError('Calibration population differs')
+                for index,bin in enumerate(bins):
+                    for key in ('count','mean_score','observed_rate'):
+                        rows.append((item['model_run_id'],split,cohort,f'calibration_{index}_{key}',bin[key],
+                                     metrics['sample_count'],metrics['positive_count'],metrics.get('reason'),evaluation_hash))
+            if rows:
+                with lease.db.cursor() as q:
+                    q.executemany(
+                        'INSERT INTO model_metric VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s) '
+                        'ON DUPLICATE KEY UPDATE value=VALUES(value),sample_count=VALUES(sample_count),'
+                        'positive_count=VALUES(positive_count),reason=VALUES(reason),evaluation_hash=VALUES(evaluation_hash)',
+                        rows)

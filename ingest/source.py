@@ -29,14 +29,24 @@ def ingest(lease,source,source_url=None):
     def archive(storage,temp,local,run_id):
         if not storage.exists(raw):
             parent=str(Path(raw).parent);storage.mkdir(parent);staged=parent+'/.source-'+run_id+'.tmp';storage.mkdir(staged)
-            storage.put(info['path'],staged+'/source.csv')
-            if storage.digest(staged+'/source.csv')!=(info['sha256'],info['bytes']):raise ManifestError('Archived raw source differs')
-            meta=dict(info,source_url=source_url);storage.write_json(staged+'/source.json',meta,local/'source.json')
-            storage.write_json(staged+'/manifest.json',{'baseline_version':BASELINE,'policy_version':POLICY,'schema_version':'1.0','source':raw_file,'source_metadata':meta,'status':'SUCCEEDED'},local/'raw-manifest.json')
-            (local/'raw_SUCCESS').touch();storage.put(local/'raw_SUCCESS',staged+'/_SUCCESS');storage.rename(staged,raw)
-        elif storage.digest(raw+'/source.csv')!=(info['sha256'],info['bytes']):raise ManifestError('Immutable archive changed')
+            try:
+                storage.put(info['path'],staged+'/source.csv')
+                if storage.digest(staged+'/source.csv')!=(info['sha256'],info['bytes']):raise ManifestError('Archived raw source differs')
+                meta=dict(info,source_url=source_url);storage.write_json(staged+'/source.json',meta,local/'source.json')
+                storage.write_json(staged+'/manifest.json',{'baseline_version':BASELINE,'policy_version':POLICY,'schema_version':'1.0','source':raw_file,'source_metadata':meta,'status':'SUCCEEDED'},local/'raw-manifest.json')
+                (local/'raw_SUCCESS').touch();storage.put(local/'raw_SUCCESS',staged+'/_SUCCESS');storage.rename(staged,raw)
+            except BaseException:
+                storage.command('-rm','-r','-f',staged,check=False)
+                raise
+        else:
+            verified=False
+            if storage.exists(raw+'/_SUCCESS') and storage.exists(raw+'/manifest.json'):
+                raw_manifest=storage.json(raw+'/manifest.json')
+                src=raw_manifest.get('source',{})
+                verified=raw_manifest.get('status')=='SUCCEEDED' and src.get('sha256')==info['sha256'] and src.get('bytes')==info['bytes']
+            if not verified and storage.digest(raw+'/source.csv')!=(info['sha256'],info['bytes']):raise ManifestError('Immutable archive changed')
         storage.write_json(temp+'/source.json',dict(info,source_url=source_url,raw_path=raw_file['path']),local/'stage-source.json')
         return {'source':raw_file,'counters':{'SOURCE':{'raw_rows':info['rows']}}}
     result=stage_run(lease,bid,'I00',[{k:info[k] for k in ('path','sha256','bytes','rows')}],{'source_url':source_url},archive)
-    with db.cursor() as q:q.execute('UPDATE data_batch SET manifest_path=%s,updated_at=%s WHERE batch_id=%s',(str(Path(result['outputs'][0]['path']).parent/'manifest.json'),now(),bid))
+    with db.cursor() as q:q.execute('UPDATE data_batch SET manifest_path=COALESCE(manifest_path,%s),updated_at=%s WHERE batch_id=%s',(str(Path(result['outputs'][0]['path']).parent/'manifest.json'),now(),bid))
     return {'status':'SUCCEEDED','batch_id':bid,'run_id':result['run_id'],'source':raw_file}

@@ -8,14 +8,16 @@ import threading
 import time
 from typing import Annotated, Literal
 from uuid import UUID, uuid4
+from zoneinfo import ZoneInfo
 import pymysql
-from fastapi import FastAPI, Query, Request
+from fastapi import FastAPI, Query, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, model_validator
-from orchestration.common import ROOT, BASELINE, fingerprint, load
+from starlette.exceptions import HTTPException as StarletteHTTPException
+from orchestration.common import ROOT, BASELINE, dataset_window, fingerprint, load
 from .database import Pool
-from .ranking import rank_entities
+from .ranking import CandidateBudgetExceeded, rank_entities
 from .security import Cursors, CursorError
 
 COUNT_FIELDS = {'event_count','pv_count','buy_count','cart_count','fav_count','uv','pv_users','pv_buy_users',
@@ -32,7 +34,8 @@ def public(value, key=''):
     if isinstance(value, (list,tuple)):
         return [public(x,key) for x in value]
     if isinstance(value, datetime):
-        return value.replace(tzinfo=timezone.utc).isoformat().replace('+00:00','Z')
+        dt = value.astimezone(timezone.utc) if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
+        return dt.isoformat().replace('+00:00','Z')
     if isinstance(value,date):
         return value.isoformat()
     if key in COUNT_FIELDS:
@@ -56,13 +59,16 @@ class ReleaseParams(Params):
 
 
 class WindowParams(ReleaseParams):
-    start: date=date(2017,11,25)
-    end: date=date(2017,12,4)
+    # 边界与缺省值由 create_app 根据配置推导，避免第二份写死的观察期。
+    start: date|None=None
+    end: date|None=None
 
     @model_validator(mode='after')
     def valid_window(self):
-        if not date(2017,11,25)<=self.start<self.end<=date(2017,12,4):
-            raise ValueError('Date range must be inside the observation window; end is exclusive')
+        if (self.start is None)!=(self.end is None):
+            raise ValueError('start and end must be supplied together')
+        if self.start is not None and self.start>=self.end:
+            raise ValueError('Date range requires start<end; end is exclusive')
         return self
 
 
@@ -95,23 +101,51 @@ class TasksParams(ReleaseParams,PageParams):
 
 
 class Cache:
-    def __init__(self):
-        self.lock=threading.Lock();self.values=OrderedDict()
+    def __init__(self, max_entries=256, max_ephemeral=128):
+        self.lock = threading.Lock()
+        self.values = OrderedDict()
+        self.ephemeral_values = OrderedDict()
+        self.inflight = {}
+        self.max_entries = max_entries
+        self.max_ephemeral = max_ephemeral
 
-    def get(self,key,producer):
+    def get(self, key, producer, *, ephemeral=False):
+        store = self.ephemeral_values if ephemeral else self.values
+        limit = self.max_ephemeral if ephemeral else self.max_entries
+        now_ts = time.monotonic()
         with self.lock:
-            cached=self.values.get(key)
-            if cached and cached[0]>time.monotonic():
-                self.values.move_to_end(key)
+            cached = store.get(key)
+            if cached and cached[0] > now_ts:
+                store.move_to_end(key)
                 return cached[1]
-            value=producer()
-            self.values[key]=(time.monotonic()+60,value)
-            while len(self.values)>256:self.values.popitem(last=False)
+            key_lock = self.inflight.get(key)
+            if key_lock is None:
+                key_lock = threading.Lock()
+                self.inflight[key] = key_lock
+        with key_lock:
+            now_ts = time.monotonic()
+            with self.lock:
+                cached = store.get(key)
+                if cached and cached[0] > now_ts:
+                    store.move_to_end(key)
+                    return cached[1]
+            value = producer()
+            with self.lock:
+                store[key] = (time.monotonic() + 60, value)
+                store.move_to_end(key)
+                while len(store) > limit:
+                    store.popitem(last=False)
+                self.inflight.pop(key, None)
             return value
 
 
 def create_app(config=None,pool=None,cursor_key=None):
     config=config or load(ROOT/'config/development.toml')
+    window=dataset_window(config)
+    source_start=window['start']
+    source_end=window['exclusive_end']  # 右开边界；配置 end_date 为包含的末日
+    business_tz=str(config.get('dataset',{}).get('timezone','Asia/Shanghai'))
+    business_zone=ZoneInfo(business_tz)
     db=pool or Pool(config,ROOT/'var/secrets/reader.cnf')
     if cursor_key is None:
         cursor_key=(ROOT/'var/secrets/cursor.key').read_bytes()
@@ -122,6 +156,8 @@ def create_app(config=None,pool=None,cursor_key=None):
     async def envelope(request:Request,call_next):
         request.state.request_id=str(uuid4())
         try:response=await call_next(request)
+        except CandidateBudgetExceeded:
+            response=JSONResponse({'error':{'code':'DEPENDENCY_UNAVAILABLE','message':'候选实体数量超过上限，请缩小日期范围或更换筛选条件后重试。','request_id':request.state.request_id}},status_code=503)
         except (pymysql.MySQLError,TimeoutError,OSError) as error:
             timed_out=isinstance(error,TimeoutError) or (isinstance(error,pymysql.MySQLError) and error.args and error.args[0] in (1969,3024))
             message='查询超过时限，请调整查询范围或分页后重试。' if timed_out else '结果库暂不可用，请稍后重试。'
@@ -136,6 +172,14 @@ def create_app(config=None,pool=None,cursor_key=None):
     async def fault_handler(request,exc):
         return JSONResponse({'error':{'code':exc.code,'message':exc.message,'request_id':request.state.request_id}},status_code=exc.status)
 
+    @app.exception_handler(StarletteHTTPException)
+    async def http_exception_handler(request:Request,exc:StarletteHTTPException):
+        code_map={404:'NOT_FOUND',405:'METHOD_NOT_ALLOWED'}
+        msg_map={404:'请求的接口或资源不存在。',405:'不支持该请求方法。'}
+        code=code_map.get(exc.status_code,'HTTP_ERROR')
+        message=msg_map.get(exc.status_code,str(exc.detail) if exc.detail else '请求失败。')
+        return JSONResponse({'error':{'code':code,'message':message,'request_id':request.state.request_id}},status_code=exc.status_code)
+
     @app.exception_handler(CursorError)
     async def cursor_handler(request,exc):
         return await fault_handler(request,Fault(422,'INVALID_QUERY','分页游标无效或查询条件已经变化。'))
@@ -144,19 +188,29 @@ def create_app(config=None,pool=None,cursor_key=None):
     async def invalid_handler(request,exc):
         return await fault_handler(request,Fault(422,'INVALID_QUERY','请检查日期、编号、枚举值和查询参数。'))
 
-    def ready(release):
-        row=db.one('SELECT * FROM data_release WHERE release_id=%s',(str(release),))
+    def check_release_status(row):
         if not row:raise Fault(404,'NOT_FOUND','数据版本不存在。')
         if row['status']=='RETIRED':raise Fault(410,'RELEASE_RETIRED','数据版本已停用。')
         if row['status']!='READY':raise Fault(409,'RELEASE_NOT_READY','数据版本尚未发布。')
         return row
 
+    def ready(release):
+        return check_release_status(db.one('SELECT * FROM data_release WHERE release_id=%s',(str(release),)))
+
+    def scope(p):
+        start=p.start or source_start
+        end=p.end or source_end
+        if not source_start<=start<end<=source_end:
+            raise Fault(422,'INVALID_QUERY','Date range must be inside the observation window; end is exclusive')
+        return start,end
+
     def response(request,data,release=None,next_cursor=None,has_more=False):
         result=public(dict(data=data,meta=dict(release_id=str(release) if release else None,baseline_version=BASELINE,
-                      request_id=request.state.request_id,next_cursor=next_cursor,has_more=has_more,business_timezone='Asia/Shanghai')))
-        if len(json.dumps(result,ensure_ascii=False,allow_nan=False).encode())>2*1024**2:
+                      request_id=request.state.request_id,next_cursor=next_cursor,has_more=has_more,business_timezone=business_tz)))
+        payload=json.dumps(result,ensure_ascii=False,allow_nan=False).encode('utf-8')
+        if len(payload)>2*1024**2:
             raise Fault(422,'INVALID_QUERY','结果过大，请缩小查询范围或分页。')
-        return result
+        return Response(content=payload,media_type='application/json')
 
     def context(route,p,extra=None):
         values=p.model_dump(mode='json');values.pop('cursor',None)
@@ -181,8 +235,8 @@ def create_app(config=None,pool=None,cursor_key=None):
         if request.query_params:raise Fault(422,'INVALID_QUERY','当前版本接口不接受查询参数。')
         row=db.one('SELECT r.* FROM current_release c JOIN data_release r ON r.release_id=c.release_id WHERE c.singleton_id=1')
         if not row:raise Fault(404,'NO_ACTIVE_RELEASE','尚无可用数据版本。')
-        ready(row['release_id'])
-        info=release_info(row);info.update(source_start='2017-11-25',source_end='2017-12-04',forecast_as_of=row['forecast_as_of'],forecast_window_end=row['forecast_window_end'])
+        check_release_status(row)
+        info=release_info(row);info.update(source_start=source_start.isoformat(),source_end=source_end.isoformat(),forecast_as_of=row['forecast_as_of'],forecast_window_end=row['forecast_window_end'])
         return response(request,info,row['release_id'])
 
     @app.get('/api/v1/releases')
@@ -192,15 +246,15 @@ def create_app(config=None,pool=None,cursor_key=None):
             at,rid=signer.decode(p.cursor,context('releases',p))
             conditions+=' AND (r.published_at<%s OR (r.published_at=%s AND r.release_id>%s))';args+=[at,at,rid]
         rows=db.all('SELECT r.release_id,r.status,r.published_at,r.selected_model_id,(c.release_id=r.release_id) AS is_current FROM data_release r LEFT JOIN current_release c ON c.singleton_id=1 WHERE '+conditions+' ORDER BY r.published_at DESC,r.release_id ASC LIMIT %s',(*args,p.limit+1))
-        for row in rows:row.update(source_start='2017-11-25',source_end='2017-12-04',is_current=bool(row['is_current']))
-        return paged(request,p,'releases',rows,lambda r:[r['published_at'].isoformat(sep=' '),r['release_id']])
+        for row in rows:row.update(source_start=source_start.isoformat(),source_end=source_end.isoformat(),is_current=bool(row['is_current']))
+        return paged(request,p,'releases',rows,lambda r:[r['published_at'].isoformat(sep=' ') if r['published_at'] is not None else None,r['release_id']])
 
-    def overview_data(p):
-        key=('overview',str(p.release_id),p.start,p.end)
+    def overview_data(release_id,start,end):
+        key=('overview',str(release_id),start,end)
         def query():
-            result=db.one('SELECT uv,pv_users,pv_buy_users FROM range_summary WHERE release_id=%s AND start_date=%s AND end_date=%s',(str(p.release_id),p.start,p.end))
+            result=db.one('SELECT uv,pv_users,pv_buy_users FROM range_summary WHERE release_id=%s AND start_date=%s AND end_date=%s',(str(release_id),start,end))
             if not result:raise Fault(404,'NOT_FOUND','该范围没有已发布统计。')
-            counts=db.all('SELECT behavior_type,SUM(event_count) AS event_count FROM event_cube WHERE release_id=%s AND date>=%s AND date<%s GROUP BY behavior_type',(str(p.release_id),p.start,p.end))
+            counts=db.all('SELECT behavior_type,SUM(event_count) AS event_count FROM event_cube WHERE release_id=%s AND date>=%s AND date<%s GROUP BY behavior_type',(str(release_id),start,end))
             result.update({kind+'_count':0 for kind in ('pv','buy','cart','fav')})
             result.update({r['behavior_type']+'_count':int(r['event_count']) for r in counts})
             result['pv_buy_ratio']=int(result['pv_buy_users'])/int(result['pv_users']) if result['pv_users'] else None
@@ -209,22 +263,24 @@ def create_app(config=None,pool=None,cursor_key=None):
 
     @app.get('/api/v1/overview')
     def overview(request:Request,p:Annotated[WindowParams,Query()]):
-        ready(p.release_id)
-        return response(request,overview_data(p),p.release_id)
+        ready(p.release_id);start,end=scope(p)
+        return response(request,overview_data(p.release_id,start,end),p.release_id)
 
     @app.get('/api/v1/trends')
     def trends(request:Request,p:Annotated[TrendsParams,Query()]):
-        ready(p.release_id)
+        ready(p.release_id);start,end=scope(p)
+        def hour_bucket(day_val, hour_val):
+            return datetime(day_val.year,day_val.month,day_val.day,hour_val,tzinfo=business_zone).isoformat()
         def query():
-            rows=db.all('SELECT date,hour,behavior_type,event_count FROM event_cube WHERE release_id=%s AND date>=%s AND date<%s ORDER BY date,hour,behavior_type',(str(p.release_id),p.start,p.end))
+            rows=db.all('SELECT date,hour,behavior_type,event_count FROM event_cube WHERE release_id=%s AND date>=%s AND date<%s ORDER BY date,hour,behavior_type',(str(p.release_id),start,end))
             counts={}
             for row in rows:
-                bucket=str(row['date'])+f'T{row["hour"]:02}:00:00+08:00' if p.granularity=='hour' else str(row['date'])
+                bucket=hour_bucket(row['date'],row['hour']) if p.granularity=='hour' else str(row['date'])
                 k=(bucket,row['behavior_type']);counts[k]=counts.get(k,0)+int(row['event_count'])
-            output=[];day=p.start
-            while day<p.end:
+            output=[];day=start
+            while day<end:
                 for hour in range(24) if p.granularity=='hour' else (None,):
-                    bucket=str(day)+(f'T{hour:02}:00:00+08:00' if hour is not None else '')
+                    bucket=hour_bucket(day,hour) if hour is not None else str(day)
                     for kind in ('pv','buy','cart','fav'):output.append(dict(bucket_start=bucket,behavior_type=kind,event_count=counts.get((bucket,kind),0)))
                 day+=timedelta(days=1)
             return output
@@ -232,17 +288,17 @@ def create_app(config=None,pool=None,cursor_key=None):
 
     @app.get('/api/v1/entities')
     def entities(request:Request,p:Annotated[EntityParams,Query()]):
-        ready(p.release_id);position=signer.decode(p.cursor,context('entities',p)) if p.cursor else None
+        ready(p.release_id);start,end=scope(p);position=signer.decode(p.cursor,context('entities',p)) if p.cursor else None
         def query():
-            return rank_entities(db,str(p.release_id),p.start,p.end,p.entity_type,p.behavior,p.limit+1,position)
-        rows=cache.get(('entities',context('entities',p),p.cursor),query)
+            return rank_entities(db,str(p.release_id),start,end,p.entity_type,p.behavior,p.limit+1,position)
+        rows=cache.get(('entities',context('entities',p),p.cursor),query,ephemeral=True)
         rows=[dict(r,rank=i+1+(int(position[2]) if position else 0)) for i,r in enumerate(rows)]
         return paged(request,p,'entities',rows,lambda r:[str(r['event_count']),r['entity_id'],r['rank']])
 
     @app.get('/api/v1/entities/{entity_id}/trend')
     def entity_trend(request:Request,entity_id:Annotated[str,Field(pattern=r'^\d{1,20}$')],p:Annotated[EntityTrendParams,Query()]):
-        ready(p.release_id)
-        rows=db.all('SELECT date,behavior_type,event_count FROM entity_daily FORCE INDEX (entity_lookup) WHERE release_id=%s AND entity_type=%s AND entity_id=%s AND date>=%s AND date<%s ORDER BY date',(str(p.release_id),p.entity_type,entity_id,p.start,p.end))
+        ready(p.release_id);start,end=scope(p)
+        rows=db.all('SELECT date,behavior_type,event_count FROM entity_daily FORCE INDEX (entity_lookup) WHERE release_id=%s AND entity_type=%s AND entity_id=%s AND date>=%s AND date<%s ORDER BY date',(str(p.release_id),p.entity_type,entity_id,start,end))
         grouped={}
         for row in rows:
             value=grouped.setdefault(str(row['date']),dict(date=str(row['date']),pv_count=0,buy_count=0,cart_count=0,fav_count=0))
@@ -251,9 +307,9 @@ def create_app(config=None,pool=None,cursor_key=None):
 
     @app.get('/api/v1/activity')
     def activity(request:Request,p:Annotated[WindowParams,Query()]):
-        ready(p.release_id)
+        ready(p.release_id);start,end=scope(p)
         def query():
-            rows=db.all('SELECT a.*,r.pv_users,r.pv_buy_users FROM activity_daily a JOIN range_summary r ON r.release_id=a.release_id AND r.start_date=a.date AND r.end_date=DATE_ADD(a.date,INTERVAL 1 DAY) WHERE a.release_id=%s AND a.date>=%s AND a.date<%s ORDER BY a.date',(str(p.release_id),p.start,p.end))
+            rows=db.all('SELECT a.*,r.pv_users,r.pv_buy_users FROM activity_daily a LEFT JOIN range_summary r ON r.release_id=a.release_id AND r.start_date=a.date AND r.end_date=DATE_ADD(a.date,INTERVAL 1 DAY) WHERE a.release_id=%s AND a.date>=%s AND a.date<%s ORDER BY a.date',(str(p.release_id),start,end))
             for r in rows:
                 r.pop('release_id',None);r['return_next_rate']=r['return_next_users']/r['active_users'] if r['active_users'] and r['return_next_users'] is not None else None
                 r['pv_buy_ratio']=r['pv_buy_users']/r['pv_users'] if r['pv_users'] else None
@@ -262,12 +318,19 @@ def create_app(config=None,pool=None,cursor_key=None):
 
     @app.get('/api/v1/users/{user_id}/activity')
     def user_activity(request:Request,user_id:Annotated[str,Field(pattern=r'^\d{1,20}$')],p:Annotated[WindowParams,Query()]):
-        ready(p.release_id)
-        rows=db.all('SELECT date,pv_count,buy_count,cart_count,fav_count,first_ts,last_ts FROM user_daily WHERE release_id=%s AND user_id=%s AND date>=%s AND date<%s ORDER BY date',(str(p.release_id),user_id,p.start,p.end))
+        ready(p.release_id);start,end=scope(p)
+        rows=db.all('SELECT date,pv_count,buy_count,cart_count,fav_count,first_ts,last_ts FROM user_daily WHERE release_id=%s AND user_id=%s AND date>=%s AND date<%s ORDER BY date',(str(p.release_id),user_id,start,end))
         if not rows:raise Fault(404,'NOT_FOUND','该用户在查询范围内没有活动记录。')
         for row in rows:
             for field in ('first_ts','last_ts'):row[field]=datetime.fromtimestamp(row[field],timezone.utc)
         return response(request,rows,p.release_id)
+
+    def _cursor_datetime(value):
+        if isinstance(value, datetime):
+            if value.tzinfo is not None:
+                value = value.astimezone(timezone.utc).replace(tzinfo=None)
+            return value.isoformat(sep=' ')
+        return str(value)
 
     @app.get('/api/v1/predictions')
     def predictions(request:Request,p:Annotated[PredictionParams,Query()]):
@@ -278,28 +341,32 @@ def create_app(config=None,pool=None,cursor_key=None):
         conditions='release_id=%s AND mode=%s AND model_run_id=%s';args=[str(p.release_id),p.mode,model]
         if p.user_id:conditions+=' AND user_id=%s';args.append(p.user_id)
         if p.cursor:
-            last_score,last_user=signer.decode(p.cursor,context('predictions',p,model))
-            conditions+=' AND (score<%s OR (score=%s AND user_id>%s))';args+=[last_score,last_score,last_user]
-        rows=db.all('SELECT user_id,score,predicted_positive,label AS observed_label,history_event_count,as_of,window_end,model_run_id FROM prediction WHERE '+conditions+' ORDER BY score DESC,user_id ASC LIMIT %s',(*args,p.limit+1))
+            pos=signer.decode(p.cursor,context('predictions',p,model))
+            if not isinstance(pos,list) or len(pos)!=3:raise CursorError('Invalid prediction cursor')
+            last_score,last_user,last_as_of=pos
+            conditions+=' AND (score<%s OR (score=%s AND (user_id>%s OR (user_id=%s AND as_of>%s))))';args+=[last_score,last_score,last_user,last_user,last_as_of]
+        rows=db.all('SELECT user_id,score,predicted_positive,label AS observed_label,history_event_count,as_of,window_end,model_run_id FROM prediction WHERE '+conditions+' ORDER BY score DESC,user_id ASC,as_of ASC LIMIT %s',(*args,p.limit+1))
         for row in rows:row.update(predicted_positive=bool(row['predicted_positive']),label_status='UNOBSERVED' if p.mode=='FORECAST' else 'OBSERVED')
-        return paged(request,p,'predictions',rows,lambda r:[r['score'],r['user_id']],model)
+        return paged(request,p,'predictions',rows,lambda r:[r['score'],r['user_id'],_cursor_datetime(r['as_of'])],model)
 
     def model_data(release,model_id):
         row=db.one('SELECT * FROM model_run WHERE model_run_id=%s AND experiment_id=%s',(str(model_id),release['experiment_id']))
         if not row:raise Fault(404,'NOT_FOUND','模型不属于该版本。')
-        result={k:row[k] for k in ('model_run_id','algorithm','status','device','best_epoch','threshold','parameter_count','training_seconds','peak_allocated_mib','peak_reserved_mib','rss_mib')}
+        result={k:row[k] for k in ('model_run_id','algorithm','status','device','seed','best_epoch','threshold','parameter_count','training_seconds','peak_allocated_mib','peak_reserved_mib','rss_mib')}
         result['config']=json.loads(row['config_json']);result['hardware']=json.loads(row['hardware_json'])
         result['history']=db.all('SELECT epoch,train_loss,validation_ap,validation_logloss,duration_seconds,sample_count,peak_gpu_mib,skipped_updates FROM model_epoch WHERE model_run_id=%s ORDER BY epoch',(str(model_id),))
-        result['metrics']=db.all('SELECT split,cohort,name,value,sample_count,positive_count,reason FROM model_metric WHERE model_run_id=%s ORDER BY split,cohort,name',(str(model_id),))
+        all_metrics=db.all('SELECT split,cohort,name,value,sample_count,positive_count,reason FROM model_metric WHERE model_run_id=%s ORDER BY split,cohort,name',(str(model_id),))
+        result['metrics']=[m for m in all_metrics if not m['name'].startswith('calibration_')]
         result['calibration']={}
-        for metric in result['metrics']:
+        for metric in all_metrics:
             if not metric['name'].startswith('calibration_'):continue
             _,index,key=metric['name'].split('_',2)
             cohort=result['calibration'].setdefault(metric['split'],{}).setdefault(metric['cohort'],{})
-            cohort.setdefault(index,dict(start=int(index)/10,end=(int(index)+1)/10))[key]=metric['value']
+            val=int(metric['value']) if key=='count' and metric['value'] is not None else metric['value']
+            cohort.setdefault(index,dict(start=int(index)/10,end=(int(index)+1)/10))[key]=val
         for split in result['calibration'].values():
             for cohort,bins in list(split.items()):split[cohort]=[bins[str(i)] for i in range(10) if str(i) in bins]
-        result['benchmarks']=db.all('SELECT device,`precision`,repeat_index,steps,elapsed_seconds,throughput,peak_allocated_mib,peak_reserved_mib,rss_mib FROM benchmark WHERE experiment_id=%s ORDER BY device,repeat_index',(release['experiment_id'],))
+        result['benchmarks']=db.all('SELECT device,`precision`,repeat_index,steps,elapsed_seconds,throughput,peak_allocated_mib,peak_reserved_mib,rss_mib FROM benchmark WHERE experiment_id=%s AND model_run_id=%s ORDER BY device,repeat_index',(release['experiment_id'],str(model_id)))
         return result
 
     @app.get('/api/v1/models/{model_run_id}')
@@ -315,6 +382,7 @@ def create_app(config=None,pool=None,cursor_key=None):
             selection=json.loads(row.pop('selection_json'))
             row.update(selection_reason=selection['reason'],models=[model_data(release,m['model_run_id']) for m in selection['finalists']])
             manifest=json.loads(release['manifest_json']);row['splits']=manifest['samples']
+            row['seed_variance']=manifest.get('seed_variance',{})
             return row
         return response(request,cache.get(('experiments',str(p.release_id)),query),p.release_id)
 
@@ -342,6 +410,6 @@ def create_app(config=None,pool=None,cursor_key=None):
     @app.get('/api/v1/reports/summary')
     def summary(request:Request,p:Annotated[ReleaseParams,Query()]):
         release=ready(p.release_id)
-        return response(request,dict(release=release_info(release),overview=overview_data(WindowParams(release_id=p.release_id)),quality=quality_data(release)),p.release_id)
+        return response(request,dict(release=release_info(release),overview=overview_data(p.release_id,source_start,source_end),quality=quality_data(release)),p.release_id)
 
     return app

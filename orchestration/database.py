@@ -23,6 +23,19 @@ def migrate(connection):
             q.execute('INSERT INTO schema_migration VALUES(%s,%s,%s)',(p.name,digest,now()))
     return {'status':'SUCCEEDED','migrations':len(list((ROOT/'migrations').glob('*.sql')))}
 
+def pending_migrations(connection):
+    with connection.cursor() as q:
+        q.execute("SHOW TABLES LIKE 'schema_migration'")
+        if not q.fetchone():return sorted((ROOT/'migrations').glob('*.sql'))
+        q.execute('SELECT version,sha256 FROM schema_migration');actual={r['version']:r['sha256'] for r in q.fetchall()}
+    pending=[]
+    for p in sorted((ROOT/'migrations').glob('*.sql')):
+        if p.name in actual:
+            if actual[p.name]!=sha(p):raise ConfigError('Applied migration checksum changed')
+            continue
+        pending.append(p)
+    return pending
+
 def require_current(connection):
     with connection.cursor() as q:
         q.execute('SELECT version,sha256 FROM schema_migration');actual={r['version']:r['sha256'] for r in q.fetchall()}
@@ -31,14 +44,33 @@ def require_current(connection):
 
 def backup(config,credentials,path):
     """mysqldump不接受client.database；临时凭据0600且不出现在进程参数。"""
+    import gzip
     import os
+    import shutil
     import subprocess
     import tempfile
     cfg=configparser.ConfigParser();cfg.read(credentials)
     selected=configparser.ConfigParser();selected['client']={k:v for k,v in cfg['client'].items() if k in ('user','password')}
     selected['client']['host']=config['database']['host'];selected['client']['port']=str(config['database']['port'])
     path=Path(path);path.parent.mkdir(parents=True,exist_ok=True)
-    with tempfile.NamedTemporaryFile(mode='w+',dir=path.parent,suffix='.cnf') as f:
-        selected.write(f);f.flush()
-        with os.fdopen(os.open(path,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600),'wb') as output:
-            subprocess.run(['mariadb-dump','--defaults-extra-file='+f.name,'--single-transaction','--skip-lock-tables',config['database']['name']],stdout=output,check=True)
+    tmp_fd,tmp_name=tempfile.mkstemp(dir=path.parent,prefix='.'+path.name+'.',suffix='.tmp')
+    tmp_path=Path(tmp_name)
+    try:
+        os.chmod(tmp_path,0o600)
+        with tempfile.NamedTemporaryFile(mode='w+',dir=path.parent,suffix='.cnf') as f:
+            selected.write(f);f.flush()
+            if path.suffix=='.gz':
+                with os.fdopen(tmp_fd,'wb') as raw_out,gzip.GzipFile(fileobj=raw_out,mode='wb') as gz_out:
+                    proc=subprocess.Popen(['mariadb-dump','--defaults-extra-file='+f.name,'--single-transaction','--skip-lock-tables',config['database']['name']],stdout=subprocess.PIPE)
+                    try:
+                        shutil.copyfileobj(proc.stdout,gz_out,1024*1024)
+                    finally:
+                        proc.stdout.close()
+                    if proc.wait()!=0:raise subprocess.CalledProcessError(proc.returncode,proc.args)
+            else:
+                with os.fdopen(tmp_fd,'wb') as output:
+                    subprocess.run(['mariadb-dump','--defaults-extra-file='+f.name,'--single-transaction','--skip-lock-tables',config['database']['name']],stdout=output,check=True)
+        os.replace(tmp_path,path)
+    except BaseException:
+        tmp_path.unlink(missing_ok=True)
+        raise

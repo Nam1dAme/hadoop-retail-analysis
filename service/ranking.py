@@ -3,6 +3,10 @@ from datetime import timedelta
 import time
 
 
+class CandidateBudgetExceeded(TimeoutError):
+    """Raised when exact entity ranking exceeds the bounded candidate budget."""
+
+
 def rank_entities(db,release,start,end,kind,behavior,limit,position=None,*,chunk=128,max_candidates=100000,budget_seconds=4.5):
     deadline=time.monotonic()+budget_seconds
     days=[];day=start
@@ -31,7 +35,7 @@ def rank_entities(db,release,start,end,kind,behavior,limit,position=None,*,chunk
             stream['done']=len(rows)<chunk
             stream['upper']=0 if stream['done'] else int(rows[-1]['event_count'])
             if rows:stream['cursor']=(int(rows[-1]['event_count']),rows[-1]['entity_id'])
-        if len(totals)+len(new)>max_candidates:raise TimeoutError('Entity ranking candidate budget exceeded; no partial result returned')
+        if len(totals)+len(new)>max_candidates:raise CandidateBudgetExceeded('Entity ranking candidate budget exceeded; no partial result returned')
         # Fetch every candidate's complete range sum, never add only daily TopK fragments.
         ids=sorted(new)
         totals.update((entity,0) for entity in ids)

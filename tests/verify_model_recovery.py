@@ -9,6 +9,7 @@ sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 from orchestration.common import ROOT,load,now,fingerprint,atomic_json,PipelineError
 from orchestration.database import connect,migrate
 from orchestration.control import Lease
+from ml.models import NUMERIC_DIM
 from ml.shards import ShardWriter,ShardDataset
 from ml.training import fit,trusted_load
 
@@ -16,13 +17,13 @@ config=load(ROOT/'var/fixtures/test.toml')
 with connect(config,ROOT/'var/secrets/test_migrator.cnf') as db:migrate(db)
 directory=ROOT/'var/tests/model-recovery'/str(uuid.uuid4());directory.mkdir(parents=True)
 for split in ('TRAIN','VALIDATION'):
- writer=ShardWriter(directory/split,[0]*14,[1]*14)
+ writer=ShardWriter(directory/split,[0]*NUMERIC_DIM,[1]*NUMERIC_DIM)
  for i in range(64):
   user=str(i+1);anchor=1511971200
   import hashlib
   row=dict(sample_key=hashlib.sha256(f'{user}|{anchor}'.encode()).hexdigest(),user_id=user,as_of=anchor,
            length=3,category=[1]*3+[0]*125,behavior=[1]*3+[0]*125,hour=[1]*3+[0]*125,
-           gap=[0]*128,numeric=[(-1 if i%2==0 else 1)]+[0]*13,label=i%2,history_event_count=3,cohort='SEEN_TRAIN')
+           gap=[0]*128,numeric=[(-1 if i%2==0 else 1)]+[0]*(NUMERIC_DIM-1),label=i%2,history_event_count=3,cohort='SEEN_TRAIN')
   writer.add(row)
  writer.finish()
 train=ShardDataset(directory/'TRAIN');validation=ShardDataset(directory/'VALIDATION')

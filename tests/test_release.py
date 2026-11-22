@@ -7,7 +7,6 @@ import pytest
 from orchestration.common import ROOT,now,fingerprint,PipelineError,ManifestError
 from orchestration.database import connect
 from publication.release import load_rows,publish_pointer
-from test_api import api
 
 pytestmark=pytest.mark.skipif(os.environ.get('BEHAVIOR_INTEGRATION')!='1',reason='Requires explicit isolated MariaDB release integration execution')
 
@@ -33,7 +32,8 @@ def test_staging_loader_interruption_resume_and_idempotence(api,monkeypatch):
 
 def test_atomic_publish_cas_and_rollback(api):
     config=api['config'];targets=[str(uuid4()),str(uuid4())]
-    datasets=('event_cube','entity_daily','user_daily','range_summary','activity_daily','TEST-CONSTANT','TEST-LOGISTIC','TEST-GRU','FORECAST')
+    datasets=('event_cube','entity_daily','user_daily','range_summary','activity_daily',
+              'TEST-CONSTANT','TEST-LOGISTIC','TEST-GRU','TEST-RULE','TEST-GBDT','FORECAST')
     with connect(config,ROOT/'var/secrets/test_writer.cnf') as db,db.cursor() as q:
         q.execute('SELECT * FROM data_release WHERE release_id=%s',(api['release'],));original=q.fetchone()
         for rid in targets:

@@ -6,7 +6,7 @@ UBA-DOC-1.0.0 / FROZEN。FastAPI只读，前缀`/api/v1`；绑定127.0.0.1，默
 
 成功响应：`{data, meta:{release_id,baseline_version,request_id,next_cursor}}`；无分页next_cursor=null。错误：`{error:{code,message,request_id}}`，不泄露SQL、凭据或内部绝对路径。ID为字符串，所有BIGINT计数作为十进制字符串；比例/分数为有限JSON number或null；不输出NaN/Infinity。业务日期YYYY-MM-DD；时间ISO8601 UTC带Z，meta可说明business_timezone=Asia/Shanghai。
 
-查询start/end为整日左闭右开，范围必须在04观察期内且start<end；未知参数、无效枚举、超过范围均422。缺省日期为全观察期。behavior为pv/buy/cart/fav；entity_type为ITEM/CATEGORY。列表limit默认20最大100，不使用深OFFSET。
+查询start/end为整日左闭右开，范围必须在04观察期内且start<end；未知参数、无效枚举、超过范围均422。缺省日期为全观察期。观察期唯一来源为配置`[dataset]`：`start_date`是首日，`end_date`是包含的最后一天；API公开的`source_start`与`source_end`分别表示首日和右开边界（例如配置为2017-11-25/2017-12-03时返回2017-11-25/2017-12-04）。`/releases`及`/releases/current`均返回这两个字段，服务与界面统一以其为准，不自行写死日期。behavior为pv/buy/cart/fav；entity_type为ITEM/CATEGORY。列表limit默认20最大100，不使用深OFFSET。
 
 ## 端点与字段
 
@@ -14,7 +14,7 @@ UBA-DOC-1.0.0 / FROZEN。FastAPI只读，前缀`/api/v1`；绑定127.0.0.1，默
 |---|---|---|
 | /health | 无 | status、database_available、baseline；只健康，不泄漏配置 |
 | /releases | cursor/limit | release_id、status、source_start/end、published_at、selected_model_id、is_current |
-| /releases/current | 无 | 当前release完整元信息及manifest摘要；无current返回404 |
+| /releases/current | 无 | 当前release完整元信息及manifest摘要，含source_start/source_end（右开）；无current返回404 |
 | /overview | release_id,start,end | pv_count/buy_count/cart_count/fav_count、uv、pv_users、pv_buy_users、pv_buy_ratio；分母0比率null |
 | /trends | release_id,start,end,granularity=day/hour | bucket_start、behavior_type、event_count；固定补0规则见04 |
 | /entities | release_id,start,end,entity_type,behavior,limit,cursor | entity_id、event_count、rank；计数降序ID升序 |

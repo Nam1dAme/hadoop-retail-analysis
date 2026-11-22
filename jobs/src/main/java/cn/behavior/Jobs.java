@@ -15,6 +15,7 @@ public final class Jobs extends Configured implements Tool {
   public int run(String[] args)throws Exception {
     if(args.length!=3)throw new IllegalArgumentException("stage input output");
     String stage=args[0];Configuration conf=getConf();
+    Event.init(conf);
     int reducers=conf.getInt("behavior.reducers",2);if(reducers<1||reducers>64)throw new IllegalArgumentException("reducers must be 1..64");
     conf.setBoolean("mapreduce.map.output.compress",true);
     conf.set("mapreduce.map.output.compress.codec","org.apache.hadoop.io.compress.DefaultCodec");
@@ -23,21 +24,25 @@ public final class Jobs extends Configured implements Tool {
     conf.setBoolean("mapreduce.map.speculative",false);conf.setBoolean("mapreduce.reduce.speculative",false);
     Job j=Job.getInstance(conf,"behavior-"+stage+"-"+conf.get("behavior.run.id","test"));j.setJarByClass(Jobs.class);
     j.setNumReduceTasks(reducers);j.setInputFormatClass(SequenceFileInputFormat.class);
-    j.setOutputFormatClass(SequenceFileOutputFormat.class);
+    LazyOutputFormat.setOutputFormatClass(j,SequenceFileOutputFormat.class);
     j.setOutputKeyClass(Text.class);j.setOutputValueClass(Text.class);
     FileOutputFormat.setCompressOutput(j,true);SequenceFileOutputFormat.setOutputCompressionType(j,SequenceFile.CompressionType.BLOCK);
     switch(stage){
       case "J01":
-        j.setInputFormatClass(TextInputFormat.class);j.setMapperClass(Clean.class);j.setReducerClass(Clean.Reduce.class);j.setMapOutputKeyClass(Text.class);j.setMapOutputValueClass(Event.class);j.setOutputKeyClass(LongWritable.class);j.setOutputValueClass(Event.class);
+        j.setInputFormatClass(TextInputFormat.class);j.setMapperClass(Clean.class);
+        // 日期分区由 MultipleOutputs 在 map 端直接写出，不需要 reducer 做纯分发。
+        j.setNumReduceTasks(0);j.setOutputKeyClass(LongWritable.class);j.setOutputValueClass(Event.class);
         MultipleOutputs.addNamedOutput(j,"facts",SequenceFileOutputFormat.class,LongWritable.class,Event.class);
         MultipleOutputs.addNamedOutput(j,"rejected",TextOutputFormat.class,Text.class,Text.class);break;
       case "J02":
-        j.setMapperClass(Profile.Map.class);j.setReducerClass(Profile.Reduce.class);secondary(j,Text.class);j.setOutputValueClass(LongWritable.class);break;
+        j.setMapperClass(Profile.Map.class);j.setCombinerClass(Profile.Combine.class);j.setReducerClass(Profile.Reduce.class);secondary(j,Text.class);
+        // D 组键是五字段哈希，只有 J02 需要按原始五字段做碰撞回退；其余作业保持 SortKey.Group 的纯 group 语义。
+        j.setGroupingComparatorClass(Profile.DuplicateGroup.class);j.setOutputValueClass(LongWritable.class);break;
       case "J03":
         j.setMapperClass(Analytics.CubeMap.class);j.setMapOutputKeyClass(Text.class);j.setMapOutputValueClass(LongWritable.class);j.setCombinerClass(Analytics.Sum.class);j.setReducerClass(Analytics.CubeReduce.class);j.setOutputValueClass(LongWritable.class);
         MultipleOutputs.addNamedOutput(j,"aggregates",SequenceFileOutputFormat.class,Text.class,LongWritable.class);break;
       case "J03rank":
-        j.setMapperClass(Ranking.Map.class);j.setReducerClass(Ranking.Reduce.class);secondary(j,Text.class);break;
+        j.setMapperClass(Ranking.Map.class);j.setCombinerClass(Ranking.Combine.class);j.setReducerClass(Ranking.Reduce.class);secondary(j,Text.class);break;
       case "J04users":
         j.setMapperClass(Analytics.UserMap.class);j.setReducerClass(Analytics.UserReduce.class);secondary(j,Event.class);
         MultipleOutputs.addNamedOutput(j,"users",SequenceFileOutputFormat.class,Text.class,Text.class);break;

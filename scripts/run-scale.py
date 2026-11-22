@@ -15,6 +15,12 @@ from orchestration.common import ROOT,load,atomic_json,stamp
 from orchestration.sampling import record_samples
 from orchestration.control import Lease
 from orchestration.resources import host_free_bytes
+from scripts._common import db_endpoint,history_base_url,load_dev_config
+
+dev_cfg=load_dev_config()
+db_host,db_port,_=db_endpoint(dev_cfg)
+hdfs_uri=dev_cfg['hdfs']['uri']
+history_url=history_base_url(dev_cfg)
 
 parser=argparse.ArgumentParser();parser.add_argument('--tiers',nargs='+',choices=['1000000','10000000','full'],default=['1000000','10000000','full']);args=parser.parse_args()
 if subprocess.check_output(['git','status','--porcelain'],cwd=ROOT).strip():raise SystemExit('Commit changes before scale execution')
@@ -27,7 +33,7 @@ with Lease(load(ROOT/'config/development.toml'),ROOT/'var/secrets/writer.cnf') a
 def history(tasks):
     results=[]
     def get(url):
-        with urllib.request.urlopen('http://127.0.0.1:19888/ws/v1/history/mapreduce/jobs/'+url,timeout=10) as r:return json.load(r)
+        with urllib.request.urlopen(f'{history_url}/ws/v1/history/mapreduce/jobs/'+url,timeout=10) as r:return json.load(r)
     for task in tasks:
         if not task['application_id']:continue
         job=task['application_id'].replace('application_','job_',1);deadline=time.monotonic()+120
@@ -65,11 +71,11 @@ sampled = {'false' if tier=='full' else 'true'}
 [source]
 path = "{path}"
 [database]
-host = "127.0.0.1"
-port = 3307
+host = "{db_host}"
+port = {db_port}
 name = "behavior_scale"
 [hdfs]
-uri = "hdfs://127.0.0.1:19000"
+uri = "{hdfs_uri}"
 root = "/behavior-scale/v1/{tier}"
 [paths]
 work_dir = "{root}"

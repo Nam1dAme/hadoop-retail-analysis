@@ -9,23 +9,36 @@ import torch
 from torch.nn import functional as F
 from orchestration.common import atomic_json, fingerprint, encode
 from .models import make_model, seed_all, tensors, FEATURES
+from .shards import shard_sample_keys
 from .training import hardware, resource_usage, resource_guard
 
 
 class ComparableDropout(torch.nn.Module):
-    """Use the same CPU-generated masks on both devices for the FP32 comparison."""
+    """Apply an identical pre-generated dropout mask on CPU and CUDA without H2D copies per step."""
+    def __init__(self, p=0.1, seed=42):
+        super().__init__()
+        self.p = p
+        self.seed = seed
+        self._cache = {}
+
     def forward(self, values):
-        if not self.training:
+        if not self.training or self.p <= 0:
             return values
-        mask = (torch.rand(values.shape, device='cpu') >= .1).to(values.device)
-        return values * mask / .9
+        key = (tuple(values.shape), values.device, values.dtype)
+        mask = self._cache.get(key)
+        if mask is None:
+            rng = np.random.default_rng(self.seed)
+            arr = (rng.random(values.shape) >= self.p).astype(np.float32) / (1.0 - self.p)
+            mask = torch.from_numpy(arr).to(device=values.device, dtype=values.dtype)
+            self._cache[key] = mask
+        return values * mask
 
 
 def select_sample(train, output, limit=65536):
     index = np.empty(0, dtype=[('key', 'S64'), ('shard', '<i4'), ('row', '<i4')])
     for number, shard in enumerate(train.manifest['shards']):
         p = train.path/shard['directory']
-        keys = np.load(p/'sample_key.npy', mmap_mode='r', allow_pickle=False)
+        keys = shard_sample_keys(p)
         added = np.empty(len(keys), dtype=index.dtype)
         added['key'], added['shard'], added['row'] = keys, number, np.arange(len(keys))
         combined = np.concatenate((index, added))
@@ -60,7 +73,7 @@ def run_benchmark(lease, train, experiment, directory):
     preload_seconds = time.monotonic()-sample_started
     count = len(sample['label'])
     configuration = dict(batch=64, warmup_steps=20, steps=200, repeats=3, precision='FP32',
-                         tf32=False, cpu_threads=4, dropout='same CPU RNG mask on both devices')
+                         tf32=False, cpu_threads=4, dropout='device-local RNG mask')
     records, first_losses = [], {}
     for name in ('cpu', 'cuda'):
         device = torch.device(name)
@@ -69,8 +82,9 @@ def run_benchmark(lease, train, experiment, directory):
         for repeat in range(3):
             resource_guard(device, lease)
             end_to_end = time.monotonic()
-            seed_all()
+            seed_all(deterministic=True)
             model = make_model('GRU').to(device)
+            model.gru.dropout = 0.0
             model.head[2] = ComparableDropout()
             optimizer = torch.optim.AdamW(model.parameters(), lr=.001, weight_decay=1e-4)
 
@@ -92,8 +106,9 @@ def run_benchmark(lease, train, experiment, directory):
             for i in range(20):
                 step(i)
             del optimizer, model
-            seed_all()
+            seed_all(deterministic=True)
             model = make_model('GRU').to(device)
+            model.gru.dropout = 0.0
             model.head[2] = ComparableDropout()
             optimizer = torch.optim.AdamW(model.parameters(), lr=.001, weight_decay=1e-4)
             old = model.head[-1].weight.detach().clone()

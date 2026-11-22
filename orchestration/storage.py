@@ -8,18 +8,30 @@ import subprocess
 import time
 import urllib.request
 import urllib.error
-from .common import ROOT,runtime_env,PipelineError,ManifestError,LockBusy,encode
+from .common import ROOT,dataset_window,runtime_env,PipelineError,ManifestError,LockBusy,encode
+from .webhdfs import WebHdfs
 
 JAR=ROOT/'jobs/target/behavior-jobs.jar'
+
+def dataset_properties(config):
+    """将配置中的数据集窗口传给所有 Hadoop 作业与 Files 工具。"""
+    window=dataset_window(config)
+    return [f'-Dbehavior.dataset.start={window["start"].isoformat()}',f'-Dbehavior.dataset.days={window["days"]}']
 class Hdfs:
-    def __init__(self,config,lease=None):self.config=config;self.lease=lease;self.env=runtime_env()
+    def __init__(self,config,lease=None):self.config=config;self.lease=lease;self.env=runtime_env();self.webhdfs=WebHdfs.from_config(config)
     def command(self,*args,check=True):
         if self.lease:self.lease.guard()
         p=subprocess.run(['hdfs','dfs','-fs',self.config['hdfs']['uri'],*map(str,args)],env=self.env,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
         if check and p.returncode:raise PipelineError('HDFS command failed: '+p.stderr.decode(errors='replace')[-1200:])
         return p
-    def exists(self,p):return self.command('-test','-e',p,check=False).returncode==0
-    def json(self,p):return json.loads(self.command('-cat',p).stdout)
+    def exists(self,p):
+        if self.lease:self.lease.guard()
+        try:return self.webhdfs.exists(p)
+        except (urllib.error.URLError,OSError):return self.command('-test','-e',p,check=False).returncode==0
+    def json(self,p):
+        if self.lease:self.lease.guard()
+        try:return json.loads(self.webhdfs.read_bytes(p))
+        except (urllib.error.URLError,OSError):return json.loads(self.command('-cat',p).stdout)
     def mkdir(self,p):self.command('-mkdir','-p',p)
     def put(self,local,remote):self.command('-put',local,remote)
     def rename(self,src,dst):
@@ -36,7 +48,7 @@ class Hdfs:
             if process.wait()!=0:raise PipelineError('Cannot verify archived source')
         return h.hexdigest(),n
     def inspect(self,path):
-        p=subprocess.run(['hadoop','jar',str(JAR),'cn.behavior.Files','-Dfs.defaultFS='+self.config['hdfs']['uri'],'inspect',path],env=self.env,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+        p=subprocess.run(['hadoop','jar',str(JAR),'cn.behavior.Files','-Dfs.defaultFS='+self.config['hdfs']['uri'],*dataset_properties(self.config),'inspect',path],env=self.env,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
         if p.returncode:raise ManifestError('Cannot inspect HDFS output: '+p.stderr.decode(errors='replace')[-1000:])
         rows=[json.loads(line) for line in p.stdout.decode().splitlines()]
         if len(rows)>10000:raise ManifestError('Output exceeds 10000 files')
@@ -46,7 +58,7 @@ class Hdfs:
         if not paths:return
         log=Path(self.config['paths']['work_dir'])/'dump-errors.log';log.parent.mkdir(parents=True,exist_ok=True)
         with log.open('ab') as err:
-            p=subprocess.Popen(['hadoop','jar',str(JAR),'cn.behavior.Files','-Dfs.defaultFS='+self.config['hdfs']['uri'],'dump',paths[0]],env=self.env,stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=err,text=True)
+            p=subprocess.Popen(['hadoop','jar',str(JAR),'cn.behavior.Files','-Dfs.defaultFS='+self.config['hdfs']['uri'],*dataset_properties(self.config),'dump',paths[0]],env=self.env,stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=err,text=True)
             try:
                 p.stdin.write('\n'.join(paths)+'\n');p.stdin.close()
                 for i,line in enumerate(p.stdout):
@@ -55,7 +67,10 @@ class Hdfs:
                 if p.wait()!=0:raise PipelineError('SequenceFile dump failed, see dump-errors.log')
             finally:
                 p.stdout.close()
-                if p.poll() is None:p.terminate();p.wait(timeout=10)
+                if p.poll() is None:
+                    p.terminate()
+                    try:p.wait(timeout=10)
+                    except subprocess.TimeoutExpired:p.kill();p.wait()
 
 def application(config,app_id):
     base=config.get('yarn',{}).get('api','http://127.0.0.1:18088')
@@ -71,7 +86,7 @@ def discover(config,name):
     return [x for x in apps.get('app',[]) if x['name']==name]
 
 def run_job(stage,inputs,output,params,lease,log,update_app):
-    args=['hadoop','jar',params.get('jar_path',str(JAR)),'cn.behavior.Jobs',f'-Dbehavior.run.id={params["run_id"]}',f'-Dbehavior.reducers={params["reducers"]}']
+    args=['hadoop','jar',params.get('jar_path',str(JAR)),'cn.behavior.Jobs',f'-Dbehavior.run.id={params["run_id"]}',f'-Dbehavior.reducers={params["reducers"]}',*dataset_properties(lease.config)]
     if params.get('source_sha256'):args.append('-Dbehavior.source.sha256='+params['source_sha256'])
     if stage=='J01' and params.get('split_bytes'):args.append('-Dbehavior.split.bytes='+str(params['split_bytes']))
     inject=lease.config.get('synthetic',False) and os.environ.get('BEHAVIOR_TEST_FAIL_STAGE')==stage
